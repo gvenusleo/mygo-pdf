@@ -1,0 +1,8 @@
+{
+  "name": "MyGo PDF",
+  "identifier": "xin.liuyu.mygo-pdf",
+  "version": "0.1.0",
+  "main": "./examples/viewer",
+  "out": "build",
+  "linux": { "webview": false }
+}

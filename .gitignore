@@ -1,0 +1,5 @@
+/build/
+/.mygo/
+/resources/*/pdfium/
+/resources/*/.pdfium-*/
+mygo_windows_*.syso

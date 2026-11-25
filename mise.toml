@@ -1,0 +1,22 @@
+[tools]
+go = "1.27.4"
+
+[tasks.resources]
+run = "go run ./cmd/pdfium-resources"
+
+[tasks.dev]
+run = "go run ./cmd/pdfium-resources && go tool mygo dev"
+
+[tasks.build]
+run = "go run ./cmd/pdfium-resources && go tool mygo build"
+
+[tasks.ci]
+run = '''
+set -e
+test -z "$(gofmt -l .)"
+go run ./cmd/pdfium-resources
+go vet ./...
+go tool mygo vet .
+MYGO_PDF_REQUIRE_INTEGRATION=1 go test -race -count=1 ./...
+CGO_ENABLED=0 MYGO_PDF_REQUIRE_INTEGRATION=1 go test -count=1 ./...
+'''
