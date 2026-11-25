@@ -10,8 +10,8 @@ import (
 	"sync"
 )
 
-// ABI 以 PDFium chromium/8179 的 public 头文件为准。
-// unsigned long 在 Unix LP64 上是 64 位，在 Windows LLP64 上是 32 位。
+// The ABI follows the public headers for PDFium chromium/8179.
+// An unsigned long is 64 bits on Unix LP64 and 32 bits on Windows LLP64.
 type Engine struct {
 	initLibrary     func()
 	loadDocument    func(*byte, uintptr, *byte) uintptr

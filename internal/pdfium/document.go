@@ -11,7 +11,7 @@ import (
 	"unsafe"
 )
 
-// MaxPDFBytes 是单份 PDF 的读取上限。
+// MaxPDFBytes is the maximum input size for a single PDF.
 const MaxPDFBytes = 256 << 20
 
 const maxPages = 100_000
@@ -47,7 +47,7 @@ func (e *Engine) Open(ctx context.Context, id uint64, data []byte) (*Document, e
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	doc := &Document{ID: id}
-	// PDFium 在关闭文档之前仍会读取这块 Go 内存。
+	// PDFium may read this Go memory until the document closes.
 	doc.pin.Pin(&data[0])
 	doc.handle = e.loadDocument(&data[0], uintptr(len(data)), nil)
 	if doc.handle == 0 {

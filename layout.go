@@ -137,7 +137,7 @@ func (l pageLayout) visiblePages(y, height float32) (first, last int) {
 	return first, last
 }
 
-// 给预取页留出空间，确保可见页的回退图可以同时留在缓存中。
+// Reserve room for prefetching so visible pages can keep their fallback images.
 const visibleBudget = render.BitmapBudget * 3 / 4
 
 func (v *Viewer) requestVisible(first, last int) {
@@ -195,14 +195,14 @@ func (v *Viewer) visibleTiles(first, last int, all bool) []rasterKey {
 	var keys []rasterKey
 	const maxTiles = render.TileBudget / (tileSide * tileSide * 4)
 	area := float64(v.width) * float64(v.height)
-	// 为视口边缘留出分块余量，限制超大视口的缓存开销。
+	// Allow for tiles that cross the viewport edge when budgeting large viewports.
 	scale := min(v.scale, math.Sqrt(float64(render.TileBudget)*0.6/(4*max(1, area))))
 	for i := first; i <= last; i++ {
 		if !all && !v.needsTiles(i, v.layout.raster(v.document, i, v.scale)) {
 			continue
 		}
 		r := v.layout.pages[i]
-		// PDFium 的虚拟整页尺寸使用有符号整数，分块仍只有 tileSide 大。
+		// Bound PDFium's signed full-page dimensions independently of the tile size.
 		pageScale := min(scale, float64(1<<24)/float64(max(r.W, r.H)))
 		size := image.Pt(max(1, int(math.Ceil(float64(r.W)*pageScale))), max(1, int(math.Ceil(float64(r.H)*pageScale))))
 		x, y := float64(size.X)/float64(r.W), float64(size.Y)/float64(r.H)

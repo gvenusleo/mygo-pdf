@@ -1,30 +1,30 @@
-# MyGo PDF 设计
+# MyGo PDF design
 
-MyGo PDF 是供桌面应用嵌入的只读 PDF 查看器。提供连续竖排、缩放、适宽与适页、选字复制和链接跳转。没有内置工具栏，宿主用公开 API 组合页面控件。本文描述当前契约，版本安排和验收标准见 [开发计划](plan.md)。
+MyGo PDF is a read-only PDF viewer for desktop applications. It supports continuous vertical scrolling, zoom, fit-to-width and fit-to-page, text selection and copying, and links. The host can build its own controls using the public API. See the [development plan](plan.md) for milestones and release criteria.
 
-## 包职责
+## Packages
 
-| 位置 | 职责 |
+| Location | Responsibility |
 | --- | --- |
-| [根包 `pdf`](../api.go) | 公开 API、主线程状态、MyGo 视图和输入、视口布局、位图缓存及后台调度 |
-| [`internal/pdfium`](../internal/pdfium) | PDFium 动态加载、跨平台 ABI、原生句柄、光栅化、文字与链接读取 |
-| [`internal/render`](../internal/render) | 光栅请求键、尺寸限制和缓存预算，由查看器与 PDFium 层共用 |
-| [`cmd/pdfium-resources`](../cmd/pdfium-resources) | 校验上游归档和动态库，为宿主的构建目录准备动态库及许可 |
-| [`examples/viewer`](../examples/viewer) | 演示在宿主中打开文件、组合工具栏和嵌入预览 |
+| [Root `pdf` package](../api.go) | Public API, UI-thread state, MyGo view and input, viewport layout, bitmap caching, and worker scheduling |
+| [`internal/pdfium`](../internal/pdfium) | PDFium loading, platform ABI, native handles, rasterization, and text and link extraction |
+| [`internal/render`](../internal/render) | Raster request keys, size limits, and cache budgets shared by the viewer and PDFium layers |
+| [`cmd/pdfium-resources`](../cmd/pdfium-resources) | Verify upstream archives and libraries, and prepare the library and licenses for the host's build |
+| [`examples/viewer`](../examples/viewer) | Demonstrate host-side file opening, toolbar composition, and embedded preview |
 
-根包依赖 `internal/pdfium` 和 `internal/render`。PDFium 层使用 `internal/render`，不依赖 MyGo。文件读取及路径授权、监听、文档生成、持久化和导出由宿主负责。
+The root package depends on `internal/pdfium` and `internal/render`. The PDFium package uses `internal/render` and has no MyGo dependency. The host handles file reads, path authorization, monitoring, document generation, persistence, and export.
 
-## 公开契约
+## Public contracts
 
-- `NewViewer` 绑定一个 MyGo 窗口，跟踪显示器缩放和窗口生命周期。宿主在主线程调用 API，用稳定的 `c.Key` 构建视图。父布局变化时改变 `View` 的可比较布局键。
-- `LoadBytes` 接收调用方转交的不可变字节和请求的取消信号，返回请求代次。打开新文档会清除当前文档，从第一页开始。刷新同一文档会保留旧画面、缩放和阅读位置，直到新文档的可见页可以一起提交。
-- `State` 返回当前状态快照。`OnChange` 合并通知并在状态提交后从主线程回调，回调可清除、关闭或发起新请求。公开页码从 1 开始，空文档页码为 0。当前页按视口中心确定，处于页间距时取最近页。
-- `Close` 立即返回并停止接收结果，`Done` 在后台释放原生文档后关闭。等待 `Done` 放在 UI 线程之外。默认菜单用英文，可用 `ChineseLabels` 或自定义文案。内链由查看器处理，`http`、`https` 和 `mailto` 外链交给宿主的 `OnLink`。宿主提供 `OpenExternal` 时可用 `CanOpenExternal` 按当前文档决定是否显示系统打开菜单项。
+- `NewViewer` binds to one MyGo window and tracks its display scale and lifetime. Call the API on the window's UI thread and build the view with a stable `c.Key`. Change the comparable layout argument to `View` when the parent layout changes.
+- `LoadBytes` takes ownership of immutable bytes and accepts a cancellation context. It returns the request generation. Opening a new document clears the current document and starts on the first page. Refreshing keeps the existing image, zoom, and reading position until the new visible pages can be installed together.
+- `State` returns a snapshot. `OnChange` coalesces notifications and invokes callbacks on the UI thread after committing state. Callbacks may clear, close, or start another load. Public page numbers start at 1, with 0 for an empty document. The current page is the one at the viewport center, or the nearest page when the center falls in a gap.
+- `Close` returns immediately and stops accepting results. `Done` closes when the worker releases the native document. Wait off the UI thread. Menu labels default to English and can be overridden or supplied by `ChineseLabels`. The viewer handles internal destinations and passes validated `http`, `https`, and `mailto` URLs to the host's `OnLink`. Hosts that supply `OpenExternal` can use `CanOpenExternal` to decide whether to show that menu item for the current document.
 
-## 渲染与资源
+## Rendering and resources
 
-PDFium 调用在进程内串行执行，文档字节在原生句柄关闭前保持固定地址。后台任务合并视口请求，通过 `Window.Update` 提交与当前文档代次及渲染需求匹配的结果。取消能阻止过期结果进入界面，已进入的同步原生调用须返回后才能释放资源。
+PDFium calls are serialized within the process, and document bytes stay pinned until the native document closes. The worker coalesces viewport requests and uses `Window.Update` to apply results that still match the current document generation and raster demand. Cancellation prevents stale results from reaching the viewer. A synchronous native call must return before its resources can be released.
 
-只构建可见页面。缩放时先显示已有位图，整页渲染超出预算时用高清分块细化视口。整页和分块缓存预算分别为 24 MiB 和 40 MiB。文档字节、在途位图和原生内存另计。单份输入最多 256 MiB，文档最多 100,000 页。
+The viewer builds only visible pages. During zoom, it displays existing bitmaps and renders high-resolution viewport tiles when a full-page raster would exceed the budget. The full-page and tile caches have budgets of 24 MiB and 40 MiB, respectively. Document bytes, in-flight bitmaps, and native memory are accounted for separately. One document can contain up to 256 MiB of input and 100,000 pages.
 
-目标为 macOS、Windows 和 glibc Linux 的 amd64 与 arm64。默认从应用资源目录的 `pdfium/` 加载动态库，也可给出绝对路径。构建时准备并校验所需资源，运行时直接读取磁盘上的库。跨平台验收分别记录构建、真实 PDFium 测试、窗口输入和安装器验证。
+Build targets are macOS, Windows, and glibc Linux on amd64 and arm64. `mygo-plugin.json` declares the matching PDFium library and a shared file with all license notices. MyGo fetches and verifies both assets during development and packaging, and places them at the root of the app's resource directory. At runtime the viewer loads the bundled library without network access. An absolute `LibraryPath` override supports custom packaging. Track build coverage, PDFium integration tests, native input, and installer verification separately for each platform.

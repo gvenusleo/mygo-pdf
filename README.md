@@ -25,9 +25,9 @@ Call `LoadBytes(ctx, data, pdf.OpenDocument)` with an immutable byte slice to di
 
 ### PDFium resources
 
-Run the resource command from the host app's module root before `mygo dev` or `mygo build`. In this checkout, use `go run ./cmd/pdfium-resources`. After a release, use `go run github.com/gvenusleo/mygo-pdf/cmd/pdfium-resources@v0.1.0`. For a cross-build, pass `-platform=linux/amd64` or the appropriate target. Multiple targets can be separated by commas.
+With MyGo `v0.10.0` or later, run `mygo dev` or `mygo build` from the host app. MyGo reads the plugin manifest, downloads the native library for the build target and the license notices, verifies their SHA-256 checksums, and packages them with the app. The viewer loads the bundled library at runtime. For direct `go run` or custom packaging, set `Options.LibraryPath` to an absolute library path.
 
-The command verifies the archive and dynamic library, then writes the library and licenses under `resources/<goos>-<goarch>/pdfium`. MyGo copies that directory into the application bundle. `Options.LibraryPath` allows an absolute path for tests and custom packaging. The viewer loads PDFium from disk at runtime.
+The plugin maintainer prepares release assets from the pinned upstream archives. Run `go run ./cmd/pdfium-resources -release=<tag>` to generate the assets and manifest in `build/pdfium-release`. Copy the generated manifest into the module root and publish its referenced assets with that tag.
 
 ## Verification
 

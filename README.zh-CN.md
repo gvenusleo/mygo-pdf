@@ -25,13 +25,9 @@ mise run dev
 
 ### 准备 PDFium 资源
 
-在宿主应用的模块根目录准备资源，再运行 `mygo dev` 或 `mygo build`。在本仓库中运行以下命令。交叉构建时，可用 `-platform=linux/amd64` 指定目标，多个目标用逗号分隔。
+使用 MyGo `v0.10.0` 或更高版本时，宿主直接运行 `mygo dev` 或 `mygo build`。MyGo 读取插件清单，按目标下载动态库和许可证，校验 SHA-256 后随应用打包。查看器运行时加载包内的库。直接使用 `go run` 或自定义打包时，可通过 `Options.LibraryPath` 指定动态库的绝对路径。
 
-```sh
-mise exec -- go run ./cmd/pdfium-resources
-```
-
-发布后，宿主可改用 `go run github.com/gvenusleo/mygo-pdf/cmd/pdfium-resources@v0.1.0`。资源命令校验下载归档和动态库，把库及许可证写入 `resources/<goos>-<goarch>/pdfium`，由 MyGo 随安装包分发。测试或自定义打包可通过 `Options.LibraryPath` 指定动态库的绝对路径。运行时从磁盘加载 PDFium。
+插件维护者从固定的上游归档准备发布资源。运行 `go run ./cmd/pdfium-resources -release=<tag>`，会在 `build/pdfium-release` 生成资源和清单。将生成的清单复制到模块根目录，并用对应标签发布其中引用的资源。
 
 ## 验证
 

@@ -3,6 +3,7 @@ package pdf
 import (
 	"fmt"
 	"image"
+	"os"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
@@ -50,7 +51,14 @@ func resourceEngine(path string) (*engine, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrLibrary, err)
 		}
-		path = filepath.Join(dir, "pdfium", name)
+		path = filepath.Join(dir, name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// Older packages stored the library under a dedicated subdirectory.
+			fallback := filepath.Join(dir, "pdfium", name)
+			if _, err := os.Stat(fallback); err == nil {
+				path = fallback
+			}
+		}
 	}
 	return pdfium.LoadEngine(path)
 }

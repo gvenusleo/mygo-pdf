@@ -81,7 +81,7 @@ func (e *Engine) characterBoxes(ctx context.Context, page, text uintptr, budget 
 }
 
 func (e *Engine) normalizedRect(page uintptr, left, top, right, bottom float64) Rect {
-	// 归一化坐标独立于光栅尺寸，裁切和固有旋转交给 PDFium。
+	// Normalize coordinates independently of raster size and let PDFium handle cropping and page rotation.
 	const extent = 1 << 16
 	var x1, y1, x2, y2 int32
 	if e.pageToDevice(page, 0, 0, extent, extent, 0, left, top, &x1, &y1) == 0 ||

@@ -1,0 +1,74 @@
+{
+  "libraries": [
+    {
+      "name": "pdfium",
+      "files": {
+        "darwin-amd64": {
+          "name": "libpdfium.dylib",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/darwin-amd64-libpdfium.dylib",
+          "sha256": "8e88cab152d9ea18c1d59135ecfca2e3235ddb896c1c564cd720f9a6f08c67fc"
+        },
+        "darwin-arm64": {
+          "name": "libpdfium.dylib",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/darwin-arm64-libpdfium.dylib",
+          "sha256": "fa68216ccec6dbdd3b9f46d7a8c921ebfdf942dd542c8f816738b87fcd0018b8"
+        },
+        "linux-amd64": {
+          "name": "libpdfium.so",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/linux-amd64-libpdfium.so",
+          "sha256": "2132a56ef078b6f27ba38849ac7ea13cac80f808e9f054dc5a8450075397a393"
+        },
+        "linux-arm64": {
+          "name": "libpdfium.so",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/linux-arm64-libpdfium.so",
+          "sha256": "c7a2be4bf1a1aa601a60ff951c1fc2db9a0840d0c5cfd83cdc389b34ed16424d"
+        },
+        "windows-amd64": {
+          "name": "pdfium.dll",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/windows-amd64-pdfium.dll",
+          "sha256": "b9324fe77556753e24443b8ff1d03b39a3aa01ccd6e56e7debb82922438e8965"
+        },
+        "windows-arm64": {
+          "name": "pdfium.dll",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/windows-arm64-pdfium.dll",
+          "sha256": "c46794087ccaa8023e7960743482820140341bf3a7a1650dec33d2af0619a114"
+        }
+      }
+    },
+    {
+      "name": "pdfium-notices",
+      "files": {
+        "darwin-amd64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        },
+        "darwin-arm64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        },
+        "linux-amd64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        },
+        "linux-arm64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        },
+        "windows-amd64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        },
+        "windows-arm64": {
+          "name": "pdfium-notices.txt",
+          "url": "https://github.com/gvenusleo/mygo-pdf/releases/download/v0.1.1/pdfium-notices.txt",
+          "sha256": "46cea65a04b534d3fab75d42f41f2e5599e73f6bf2844a8571c46daf4ea3a97f"
+        }
+      }
+    }
+  ]
+}

@@ -33,21 +33,29 @@ var archives = map[string]archive{
 }
 
 func main() {
-	platform := flag.String("platform", runtime.GOOS+"/"+runtime.GOARCH, "目标平台，格式为 GOOS/GOARCH，多个目标用逗号分隔")
+	platform := flag.String("platform", runtime.GOOS+"/"+runtime.GOARCH, "Target platform as GOOS/GOARCH. Separate multiple targets with commas.")
+	output := flag.String("output", "resources", "Directory for prepared platform resources")
+	tag := flag.String("release", "", "Prepare assets and a plugin manifest for this MyGo PDF release tag")
 	flag.Parse()
+	if *tag != "" {
+		if err := prepareRelease(*tag); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	for target := range strings.SplitSeq(*platform, ",") {
 		spec, ok := archives[target]
 		if !ok {
-			log.Fatalf("PDFium 暂不支持 %s", target)
+			log.Fatalf("PDFium does not support %s", target)
 		}
-		if err := prepare(target, spec); err != nil {
-			log.Fatalf("准备 %s 的 PDFium 失败：%v", target, err)
+		if err := prepare(*output, target, spec); err != nil {
+			log.Fatalf("prepare PDFium for %s: %v", target, err)
 		}
 	}
 }
 
-func prepare(target string, spec archive) error {
-	parent := filepath.Join("resources", strings.Replace(target, "/", "-", 1))
+func prepare(root, target string, spec archive) error {
+	parent := filepath.Join(root, strings.Replace(target, "/", "-", 1))
 	output := filepath.Join(parent, "pdfium")
 	if prepared(output, spec) {
 		return nil
@@ -72,7 +80,7 @@ func prepare(target string, spec archive) error {
 		return err
 	}
 	if !prepared(next, spec) {
-		return fmt.Errorf("PDFium 动态库的 SHA-256 校验失败")
+		return fmt.Errorf("PDFium library SHA-256 mismatch")
 	}
 	return install(next, output, spec)
 }
@@ -106,7 +114,7 @@ func install(next, output string, spec archive) error {
 	if err := os.Rename(next, output); err == nil || prepared(output, spec) {
 		return nil
 	}
-	// 保留上一份目录，换入失败时可以恢复。
+	// Keep the previous directory so it can be restored if replacement fails.
 	previous := filepath.Join(filepath.Dir(next), "previous")
 	moveErr := os.Rename(output, previous)
 	if moveErr != nil && !os.IsNotExist(moveErr) {
@@ -129,14 +137,14 @@ func download(spec archive) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("下载返回 HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil {
 		return nil, err
 	}
 	if fmt.Sprintf("%x", sha256.Sum256(data)) != spec.digest {
-		return nil, fmt.Errorf("PDFium 归档的 SHA-256 校验失败")
+		return nil, fmt.Errorf("PDFium archive SHA-256 mismatch")
 	}
 	return data, nil
 }

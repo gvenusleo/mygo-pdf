@@ -105,7 +105,7 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
 	v.setWanted(nil)
 	v.clearTiles()
-	// 只发布新文档的图像，避免旧画面和新文字、链接混用。
+	// Install only images from the new document so its text and links match the display.
 	first, last := frames[0].key.Page, frames[len(frames)-1].key.Page
 	for page := range v.cache {
 		if page < first || page > last {
@@ -224,7 +224,7 @@ func (v *Viewer) removePage(page int) {
 
 func (f *pageFrame) installBitmap(old *pageFrame) {
 	if old != nil && old.key.Region().Size() == f.key.Region().Size() {
-		// 复用纹理标识，连续更新 PDF 时直接上传新像素。
+		// Reuse the texture so a PDF refresh only has to upload new pixels.
 		old.bitmap.Update(f.pixels)
 		f.bitmap = old.bitmap
 	} else {

@@ -1,39 +1,43 @@
-# MyGo PDF 开发约定
+# MyGo PDF development guidelines
 
-MyGo PDF 是用 Go、MyGo Native UI 和 PDFium 实现的桌面只读预览组件。[设计文档](docs/design.md)记录已实现的公开契约、包职责和运行约束，[开发计划](docs/plan.md)记录后续工作。
+MyGo PDF is a read-only desktop viewer built with Go, MyGo Native UI, and PDFium. See the [design](docs/design.md) for the current contracts and the [development plan](docs/plan.md) for upcoming work.
 
-## 原则
+## Project language
 
-- 保持简单。优先复用标准库和 MyGo 组件，有实际调用方需求再增加抽象、选项或依赖。
-- 先设计，后改码。改变公开 API、输入所有权、关闭与刷新语义、支持平台或打包方式时，先更新设计文档并确认方向。修复违反已有契约的问题时，按现有设计恢复行为。
-- 组件负责加载字节、显示和导航。文件监听、路径授权、编译、导出及外部打开策略由宿主管理。示例可演示宿主功能，库本身保持只读。
-- 公开 API 维持 Go 文档与行为一致。变更前用独立示例核对宿主接入，避免把宿主的业务类型带进组件。
+Write all project-authored material in English. This includes source comments, Go documentation, default UI text, command help, errors, logs, test messages, configuration comments, commit messages, pull requests, and release titles and notes. Keep the canonical documentation in English. Selected documents may have separate, locale-suffixed Chinese translations, such as `README.zh-CN.md`. Explicitly selected UI translations and test fixtures may contain text in the language they exercise.
 
-## 分层与编码
+## Principles
 
-- 根包 `pdf` 负责查看器 API、MyGo 视图、交互、布局、缓存和后台调度。`internal/pdfium` 负责动态库、ABI、文档句柄及渲染和文字读取。`internal/render` 定义光栅请求和预算，保持无 UI、无 FFI。
-- `cmd/pdfium-resources` 负责准备打包资源。`examples/viewer` 通过公开 API 演示接入。核心包无需依赖命令或示例。
-- Go 标识符、公开 Go 文档和默认错误使用英文，设计文档与开发约定用中文书面语。界面文案可由宿主覆盖。注释解释约束和原因，文件按职责拆分，函数尽量控制在 60 行内。
-- 写 Go 代码前查阅可用的 `use-modern-go` 技能，改 MyGo 界面或生命周期时查阅 `mygo-maintenance`。修改已有文件前先读相关内容，局部改动用编辑工具，只改任务所需的部分。
+- Prefer the standard library and existing MyGo components. Add abstractions, options, and dependencies when a caller needs them.
+- Update the design and agree on the direction before changing the public API, input ownership, shutdown or refresh behavior, supported platforms, or packaging. Fix deviations from an existing contract against the documented behavior.
+- The component loads PDF bytes, displays pages, and handles navigation. The host owns file monitoring, path authorization, compilation, export, and external opening policy. The library is read-only.
+- Keep API behavior and Go documentation in sync. Verify changes through the standalone example and keep host-specific types outside the component.
 
-## 生命周期与渲染
+## Packages and code
 
-- 界面状态在窗口主线程读写。后台任务接收快照，经 `Window.Update` 返回结果。保留稳定的 `c.Key`，持有状态、句柄或服务，避免跨构建持有 `ui.Element`、构建部件及 `*ui.Context`。
-- `LoadBytes` 接管不可变输入。PDFium 使用期间保持字节地址固定，按页句柄、文档句柄、固定内存的顺序释放。进程内所有 PDFium 调用串行执行。
-- 新加载先核对取消状态。提交后台结果时核对请求代次、文档代次和视口需求。刷新先准备新文档的可见页，再一起替换布局与画面。过期结果和新旧代次混用的画面都应被拦截。
-- `OnChange` 在状态提交后通知宿主，允许回调内清除、关闭或重新加载。`Close` 幂等并立即返回，`Done` 表示后台已释放文档。主线程无需等待 `Done`。
-- 预览使用 MyGo 原生组件与主题。耗时 I/O 和原生渲染放到后台。改动调度或缓存时，核对可见区是否先获得画面，旧任务能否及时退出，以及预算是否覆盖改动新增的资源。
+- The root `pdf` package owns the viewer API, MyGo view, input, layout, cache, and worker scheduling. `internal/pdfium` owns library loading, ABI bindings, native handles, rasterization, and text extraction. `internal/render` defines raster requests and budgets and has no UI or FFI dependencies.
+- `cmd/pdfium-resources` prepares test libraries and plugin release assets. `mygo-plugin.json` declares the released libraries and license notices for host builds. `examples/viewer` demonstrates the public API. Core packages do not depend on the commands or example.
+- Explain constraints and reasons in comments. Organize files by responsibility and aim for functions of 60 lines or fewer.
+- Consult `use-modern-go` before editing Go and `mygo-maintenance` for MyGo UI or lifecycle changes when those skills are available. Read files before editing and keep changes scoped to the task.
 
-## 验证与交付
+## Lifecycle and rendering
 
-只保留能防止具体回归的测试，重点是代次、取消、重入、资源释放与跨页换版。异步测试用受控结果或状态信号。修复可重现的回归时，先确认测试能在旧行为上失败，再验证修复。视觉和窗口输入用 `ui.NewTester` 或实际窗口核对，如实说明各平台覆盖范围。
+- Read and write UI state on the window thread. Pass snapshots to workers and publish results through `Window.Update`. Use stable `c.Key` values. Keep state, handles, or services across builds. `ui.Element`, builder parts, and `*ui.Context` are scoped to view construction.
+- `LoadBytes` takes ownership of immutable input. Keep its address pinned while PDFium can read it. Release page handles before the document handle, then unpin the input. Serialize all PDFium calls within the process.
+- Check cancellation before starting a load. Before applying a result, check the request generation, document generation, and current viewport demand. Prepare the visible pages for a refresh, then replace the layout and images together.
+- Deliver `OnChange` after committing viewer state. Callback code may clear, close, or reload the viewer. `Close` is idempotent and returns immediately. `Done` signals that the worker has released the document. Wait for it off the UI thread.
+- Use MyGo native components and theme values. Run slow I/O and native rendering in the background. When changing scheduling or caching, verify visible-page priority, cancellation, and memory budgets.
 
-| 命令 | 作用 |
+## Verification and delivery
+
+Keep tests that prevent specific regressions in generation handling, cancellation, reentrancy, resource disposal, or multi-page refresh. Drive asynchronous tests with controlled results or state signals. For reproducible regressions, verify that the test fails against the old behavior. Check visual changes and input with `ui.NewTester` or real windows, and report the platforms exercised.
+
+| Command | Purpose |
 | --- | --- |
-| `mise run dev` | 准备本机 PDFium 并启动示例，支持热重载 |
-| `mise run resources` | 准备并校验本机 PDFium 资源 |
-| `mise run ci` | 格式检查、Go 与 MyGo 静态检查、真实 PDFium 竞态测试和无 cgo 测试 |
-| `mise run build` | 准备本机 PDFium 并构建示例安装包 |
-| `mise exec -- gofmt -w <文件>` | 格式化改过的 Go 文件 |
+| `mise run dev` | Start the example with live reload using the plugin manifest |
+| `mise run resources` | Prepare and verify PDFium for local integration tests |
+| `mise run ci` | Check formatting, run Go and MyGo vet, and test with PDFium, the race detector, and cgo disabled |
+| `mise run build` | Package the example and its declared PDFium assets |
+| `mise exec -- gofmt -w <file>` | Format the edited Go file |
 
-改动 FFI 或打包时，核对受影响目标的 ABI、动态库校验和、许可证和实际包内路径。改动文档时同步维护中英文 README 的接入说明，用 `write` 自查标点和链接。提交前检查改动范围和验证结果，只在用户明确要求时提交、推送或发布，提交说明使用中文 Conventional Commits。
+For FFI or packaging changes, verify the affected ABI, library checksums, license notices, and installed resource paths. Keep README translations in sync with the English instructions and check document links and punctuation. Use English Conventional Commits. Commit, push, and publish only with explicit authorization.

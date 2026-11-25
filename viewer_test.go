@@ -27,7 +27,7 @@ func TestPDFiumPreview(t *testing.T) {
 		select {
 		case <-v.Done():
 		case <-time.After(5 * time.Second):
-			t.Error("查看器关闭后仍有后台任务")
+			t.Error("background work remained after closing the viewer")
 		}
 	})
 	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil) }, 420, 360)
@@ -36,54 +36,54 @@ func TestPDFiumPreview(t *testing.T) {
 	await(t, updates, view, func() bool { return v.document != 0 })
 	first, ok := view.Find("Page 1")
 	if !ok || first.W < 300 || len(v.pages) != 4 {
-		t.Fatalf("首次加载：页面 %v，页数 %d", first, len(v.pages))
+		t.Fatalf("initial load: first page %v, page count %d", first, len(v.pages))
 	}
 	img := view.Image()
 	if pixel := img.RGBAAt(int(first.X+first.W*0.1), int(first.Y+first.H*0.2)); pixel != (color.RGBA{255, 0, 0, 255}) {
-		t.Fatalf("PDF 原色渲染为 %v", pixel)
+		t.Fatalf("unexpected PDF pixel color: %v", pixel)
 	}
 	frame := v.cache[0].frame
 	if len(frame.chars) == 0 || len(frame.links) < 2 {
-		t.Fatalf("PDF 缺少文字或链接：%d 字形，%d 链接", len(frame.chars), len(frame.links))
+		t.Fatalf("missing PDF text or links: %d glyphs, %d links", len(frame.chars), len(frame.links))
 	}
 	for _, label := range []string{"Zoom out", "Zoom in", "Fit width"} {
 		if _, exists := view.Find(label); exists {
-			t.Fatalf("预览中出现了 %s 按钮", label)
+			t.Fatalf("unexpected %s button in the preview", label)
 		}
 	}
 	view.ClickAt(first.X+30, first.Y+30)
 	view.Key(ui.Shift, ui.KeyEqual)
 	if v.zoom != 1.25 {
-		t.Fatalf("键盘放大后的缩放为 %v", v.zoom)
+		t.Fatalf("zoom after keyboard zoom-in: %v", v.zoom)
 	}
 	view.Key(0, ui.KeyMinus)
 	if v.zoom != 1 {
-		t.Fatalf("键盘缩小后的缩放为 %v", v.zoom)
+		t.Fatalf("zoom after keyboard zoom-out: %v", v.zoom)
 	}
 	view.Pinch(first.X+80, first.Y+100, 1.25)
 	if v.zoom != 1.25 {
-		t.Fatalf("页面上捏合后的缩放为 %v", v.zoom)
+		t.Fatalf("zoom after a pinch on the page: %v", v.zoom)
 	}
 	view.Key(0, ui.Key0)
 	if !v.viewportInput(ui.Services{})(ui.InputEvent{Kind: ui.InputScroll, Mods: ui.Ctrl, DY: -30, X: 100, Y: 100}) || v.zoom <= 1 {
-		t.Fatalf("修饰键滚轮缩放为 %v", v.zoom)
+		t.Fatalf("zoom after modifier-wheel input: %v", v.zoom)
 	}
 	view.Key(0, ui.Key0)
 	if v.zoom != 1 {
-		t.Fatalf("键盘适宽后的缩放为 %v", v.zoom)
+		t.Fatalf("zoom after keyboard fit-width: %v", v.zoom)
 	}
 	v.scroll.X, v.scroll.Y = 0, 0
 	view.Frame()
 	checkCopy(t, v, view, updates, first, v.layout.pages[0], frame)
 	view.Scroll(100, 100, 0, v.layout.pages[2].Y-v.scroll.Y+20)
 	if v.anchor().page != 2 {
-		t.Fatalf("连续滚动后位于第 %d 页", v.anchor().page+1)
+		t.Fatalf("continuous scrolling stopped on page %d", v.anchor().page+1)
 	}
 	checkRefresh(t, v, view, updates)
 	view.SetSize(600, 380)
 	view.Frame()
 	if v.width != 600 || v.height <= 0 {
-		t.Fatalf("未更新视口尺寸：%v × %v", v.width, v.height)
+		t.Fatalf("viewport dimensions did not update: %v x %v", v.width, v.height)
 	}
 	checkSupersededLoad(t, v, view, updates)
 	checkSharpTiles(t, v, view, updates)
@@ -99,11 +99,11 @@ func checkCopy(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(), 
 	view.Release(x2, y2)
 	view.Key(ui.Cmd, ui.KeyC)
 	if !v.hasSelection {
-		t.Fatal("拖动没有产生文字选区")
+		t.Fatal("dragging did not select text")
 	}
 	await(t, updates, view, func() bool { return view.Clipboard() != "" })
 	if got := view.Clipboard(); got != "Hello PDF" {
-		t.Errorf("复制文字为 %q", got)
+		t.Errorf("copied text: %q", got)
 	}
 	view.SetClipboard("")
 	view.RightClickAt(x1, y1)
@@ -118,14 +118,14 @@ func checkCopy(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(), 
 		}
 	}
 	if internal.Bounds.W == 0 {
-		t.Fatal("未找到页内链接")
+		t.Fatal("internal link was not found")
 	}
 	view.ClickAt(visible.X+(internal.Bounds.X+internal.Bounds.W/2)*page.W, visible.Y+(internal.Bounds.Y+internal.Bounds.H/2)*page.H)
 	if v.anchor().page != 1 {
-		t.Fatalf("点击页内链接后位于第 %d 页", v.anchor().page+1)
+		t.Fatalf("internal link jumped to page %d", v.anchor().page+1)
 	}
 	if v.anchor().fraction < 0.2 {
-		t.Fatal("目的地在页内，跳转却停在页顶")
+		t.Fatal("the jump stopped at the page top instead of the destination within the page")
 	}
 }
 
@@ -139,24 +139,24 @@ func checkRefresh(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if v.LoadBytes(canceled, samplePDF(1), OpenDocument) != 0 {
-		t.Fatal("已取消的任务进入队列")
+		t.Fatal("a canceled request entered the queue")
 	}
 	await(t, updates, view, func() bool { return v.document != id })
 	if after := v.anchor(); after.page != before.page || after.fraction < 0.39 || after.fraction > 0.41 || v.zoom != 1.25 {
-		t.Fatalf("刷新丢失阅读位置：刷新前 %+v，刷新后 %+v，缩放 %v", before, after, v.zoom)
+		t.Fatalf("refresh lost the reading position: before %+v, after %+v, zoom %v", before, after, v.zoom)
 	}
 	id = v.document
 	v.LoadBytes(t.Context(), []byte("invalid"), RefreshDocument)
 	await(t, updates, view, func() bool { return !v.State().Loading })
 	if !errors.Is(v.State().Err, ErrInvalidPDF) {
-		t.Fatalf("损坏的 PDF 加载错误：%v", v.State().Err)
+		t.Fatalf("unexpected load error for malformed PDF: %v", v.State().Err)
 	}
 	if v.document != id || len(v.pages) != 3 {
-		t.Fatal("损坏的 PDF 替换了成功预览")
+		t.Fatal("a malformed PDF replaced the existing preview")
 	}
 	v.Clear()
 	if len(v.pages) != 0 || len(v.cache) != 0 || v.scroll.Y != 0 {
-		t.Fatal("切换后保留了旧文档状态")
+		t.Fatal("clearing retained the old document state")
 	}
 }
 
@@ -168,11 +168,11 @@ func checkSharpTiles(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan fu
 	view.Frame()
 	before := bytes.Clone(view.Image().Pix)
 	if len(v.tileKeys) == 0 {
-		t.Fatal("高倍率下没有请求高清分块")
+		t.Fatal("no high-resolution tiles requested at high zoom")
 	}
 	key := v.tileKeys[0]
 	if got, want := float32(key.Size.X), 2*v.layout.pages[key.Page].W; got < want || got > want+1 {
-		t.Fatalf("高倍率下渲染宽度为 %v，预期至少 %v 像素", got, want)
+		t.Fatalf("render width at high zoom was %v, want at least %v pixels", got, want)
 	}
 	await(t, updates, view, func() bool {
 		for _, key := range v.tileKeys {
@@ -184,20 +184,20 @@ func checkSharpTiles(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan fu
 	})
 	w, h := v.tiles[key].frame.bitmap.Size()
 	if w != key.Tile.Dx() || h != key.Tile.Dy() {
-		t.Fatalf("分块尺寸为 %d × %d", w, h)
+		t.Fatalf("unexpected tile dimensions: %d x %d", w, h)
 	}
 	if got := view.Image().RGBAAt(100, 60); got != (color.RGBA{255, 0, 0, 255}) {
-		t.Fatalf("偏移后的分块未对齐页面，颜色为 %v", got)
+		t.Fatalf("offset tiles did not align with the page: pixel color %v", got)
 	}
 	if bytes.Equal(before, view.Image().Pix) {
-		t.Fatal("高清分块完成后，屏幕仍显示原来的整页回退图")
+		t.Fatal("the screen still shows only the fallback image after the tiles completed")
 	}
 	previous := v.document
 	changed := bytes.ReplaceAll(samplePDF(2), []byte("1 0 0 rg"), []byte("0 1 0 rg"))
 	v.LoadBytes(t.Context(), changed, RefreshDocument)
 	await(t, updates, view, func() bool { return v.document != previous })
 	if got := view.Image().RGBAAt(100, 60); got != (color.RGBA{0, 255, 0, 255}) {
-		t.Fatalf("新文档提交后仍显示上一代分块，颜色为 %v", got)
+		t.Fatalf("a tile from the old document remained after refresh: pixel color %v", got)
 	}
 }
 
@@ -217,15 +217,15 @@ func TestRefreshRendersVisiblePages(t *testing.T) {
 	await(t, updates, view, func() bool { return v.cache[1].frame != nil })
 	second, ok := view.Find("Page 2")
 	if !ok || second.Y+40 >= v.height {
-		t.Fatal("测试视口未显示第二页")
+		t.Fatal("the second page is outside the test viewport")
 	}
 	green := color.RGBA{0, 255, 0, 255}
 	load(bytes.ReplaceAll(data, []byte("1 0 0 rg"), []byte("0 1 0 rg")))
 	if got := view.Image().RGBAAt(int(second.X+20), int(second.Y+40)); got != green {
-		t.Errorf("刷新提交后的第二页像素为 %v，预期为 %v", got, green)
+		t.Errorf("second-page pixel after refresh: got %v, want %v", got, green)
 	}
 
-	// 位图已排队时仍可滚动，提交必须覆盖新的视口。
+	// The user can scroll while a result is queued. The refresh must cover the new viewport.
 	await(t, updates, view, func() bool { return len(v.wanted) == 0 })
 	previous := v.document
 	v.LoadBytes(t.Context(), data, RefreshDocument)
@@ -236,7 +236,7 @@ func TestRefreshRendersVisiblePages(t *testing.T) {
 		apply()
 		view.Frame()
 	case <-time.After(5 * time.Second):
-		t.Fatal("没有收到刷新结果")
+		t.Fatal("refresh result did not arrive")
 	}
 	await(t, updates, view, func() bool { return v.document != previous })
 	first, last := v.visiblePages()
@@ -245,7 +245,7 @@ func TestRefreshRendersVisiblePages(t *testing.T) {
 	v.scroll.Y = v.layout.pages[4].Y
 	view.Frame()
 	if v.anchor().page < 2 {
-		t.Fatal("测试视口未滚到即将移除的页面")
+		t.Fatal("the test viewport did not reach the pages about to be removed")
 	}
 	load(samplePDF(2))
 	first, last = v.visiblePages()
@@ -257,7 +257,7 @@ func assertVisibleFrames(t *testing.T, v *Viewer, first, last int) {
 	for page := first; page <= last; page++ {
 		frame := v.cache[page].frame
 		if frame == nil || frame.key.Document != v.document {
-			t.Errorf("第 %d 页缺少新文档的位图", page+1)
+			t.Errorf("page %d has no bitmap from the new document", page+1)
 		}
 	}
 }
@@ -278,14 +278,14 @@ func TestVisiblePageRequestsSettle(t *testing.T) {
 		v.requestVisible(first, last)
 		if len(v.wanted) == 0 {
 			if len(v.tiles) == 0 || len(v.cache) != len(v.pages) {
-				t.Fatal("未完成可见分块及整页回退图")
+				t.Fatal("visible tiles and full-page fallbacks did not finish")
 			}
 			return
 		}
 		key := v.wanted[0]
 		v.finishPage(key, &pageFrame{key: key, pixels: image.NewRGBA(image.Rectangle{Max: key.Region().Size()})}, nil)
 	}
-	t.Fatal("可见页仍在反复重绘")
+	t.Fatal("visible pages kept rerendering")
 }
 
 func checkSupersededLoad(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func()) {
@@ -295,17 +295,17 @@ func checkSupersededLoad(t *testing.T, v *Viewer, view *ui.Tester, updates <-cha
 	select {
 	case oldUpdate = <-updates:
 	case <-time.After(10 * time.Second):
-		t.Fatal("旧文档未完成后台渲染")
+		t.Fatal("the old document did not finish background rendering")
 	}
 	v.Clear()
 	v.LoadBytes(t.Context(), samplePDF(2), RefreshDocument)
 	oldUpdate()
 	if v.document != 0 {
-		t.Fatal("旧文档在切换后替换了预览")
+		t.Fatal("a stale document replaced the preview after switching")
 	}
 	await(t, updates, view, func() bool { return v.document != 0 })
 	if len(v.pages) != 2 {
-		t.Fatalf("切换后显示了 %d 页", len(v.pages))
+		t.Fatalf("unexpected page count after switching documents: %d", len(v.pages))
 	}
 }
 
@@ -318,7 +318,7 @@ func await(t *testing.T, updates <-chan func(), view *ui.Tester, until func() bo
 			update()
 			view.Frame()
 		case <-timeout:
-			t.Fatal("PDFium 结果未返回")
+			t.Fatal("PDFium result did not arrive")
 		}
 	}
 }
@@ -331,7 +331,7 @@ func testEngine(t *testing.T) func() (*engine, error) {
 	}
 	path := os.Getenv("MYGO_PDF_TEST_LIBRARY")
 	if path == "" {
-		path, err = filepath.Abs(filepath.Join("resources", runtime.GOOS+"-"+runtime.GOARCH, "pdfium", name))
+		path, err = filepath.Abs(filepath.Join("build", "test-resources", runtime.GOOS+"-"+runtime.GOARCH, "pdfium", name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -339,7 +339,7 @@ func testEngine(t *testing.T) func() (*engine, error) {
 			if os.Getenv("MYGO_PDF_REQUIRE_INTEGRATION") == "1" {
 				t.Fatalf("PDFium integration requires %s", path)
 			}
-			t.Skip("本机尚未准备 PDFium 构建资源")
+			t.Skip("local PDFium resources have not been prepared")
 		}
 	}
 	return func() (*engine, error) { return pdfium.LoadEngine(path) }

@@ -21,7 +21,7 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 	firstMeasurement := unmeasured && !v.waitingBounds
 	v.waitingBounds = unmeasured
 	if v.measure(bounds.W, bounds.H, t.Space(3)) || layoutChanged || firstMeasurement {
-		// MyGo 先构建后布局，首次出现和尺寸变化时在下一帧读取新尺寸。
+		// MyGo builds before layout. Measure again after the first frame or a size change.
 		c.AnimationFrame()
 	}
 	if len(v.pages) == 0 {
@@ -78,7 +78,7 @@ func (v *Viewer) pageView(c *ui.Context, index int) {
 	r := v.layout.pages[index]
 	entry := v.cache[index]
 	label := fmt.Sprintf(cmp.Or(v.options.Labels.Page, "Page %d"), index+1)
-	// 文档代次变更时取消旧页面的鼠标捕获。
+	// Changing the document key releases pointer capture from the previous page.
 	key := struct {
 		document uint64
 		page     int
@@ -136,7 +136,7 @@ func (v *Viewer) highlight(c *ui.Context, page int, frame *pageFrame, bounds ui.
 		end = min(end, v.selection.Last.Index+1)
 	}
 	color := c.Theme().Selection
-	// 合并同一行相邻字形，缩短长选区对应的视图树。
+	// Merge adjacent glyphs on the same line to limit the number of highlight views.
 	var line ui.Rect
 	for _, rect := range frame.chars[min(start, end):end] {
 		if rect.W == 0 || rect.H == 0 {

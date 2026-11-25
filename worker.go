@@ -201,7 +201,7 @@ func (v *Viewer) publishLoad(job *loadJob, doc *document, plan loadPlan, frames 
 		if job.id != v.loadID || job.ctx.Err() != nil {
 			return false
 		}
-		// 提交前按最新视口核对可见页。页数减少时先限制滚动位置，再决定渲染哪些页。
+		// Recheck the viewport before committing. Clamp scroll first if the document shrank.
 		if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
 			next := viewport.plan(doc)
 			if !slices.Equal(next.keys, plan.keys) {
@@ -290,7 +290,7 @@ func renderFrame(e *engine, ctx context.Context, doc *document, key rasterKey) (
 	return &pageFrame{key: key, pixels: frame.Pixels, chars: frame.Chars, links: frame.Links}, nil
 }
 
-// 等待主线程确认接收后再开始下一份结果，避免位图堆积在窗口队列中。
+// Wait for the UI thread to consume each result so bitmaps cannot pile up in its queue.
 func (v *Viewer) deliver(apply func() bool) bool {
 	accepted := make(chan bool, 1)
 	v.publish(func() {
