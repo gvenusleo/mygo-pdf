@@ -14,9 +14,8 @@ import (
 // An unsigned long is 64 bits on Unix LP64 and 32 bits on Windows LLP64.
 type Engine struct {
 	initLibrary     func()
-	loadDocument    func(*byte, uintptr, *byte) uintptr
-	loadCustom      func(*fileAccess, *byte) uintptr
-	lastError       func() cLong
+	loadDocument    func(*byte, uintptr, *byte) (uintptr, cLong)
+	loadCustom      func(*fileAccess, *byte) (uintptr, cLong)
 	closeDocument   func(uintptr)
 	pageCount       func(uintptr) int32
 	userPermissions func(uintptr) cLong
@@ -76,8 +75,9 @@ type Engine struct {
 }
 
 type library struct {
-	symbol func(string, any) error
-	close  func()
+	symbol  func(string, any) error
+	address func(string) (uintptr, error)
+	close   func()
 }
 
 var (
@@ -124,6 +124,10 @@ func loadEngine(path string) (*Engine, error) {
 		return nil, fmt.Errorf("load PDFium: %w", err)
 	}
 	e := new(Engine)
+	if err := e.bindLoaders(lib); err != nil {
+		lib.close()
+		return nil, err
+	}
 	for _, symbol := range e.symbols() {
 		if err := lib.symbol(symbol.name, symbol.fn); err != nil {
 			lib.close()
@@ -131,7 +135,6 @@ func loadEngine(path string) (*Engine, error) {
 		}
 	}
 	for _, symbol := range []binding{
-		{"FPDF_LoadCustomDocument", &e.loadCustom},
 		{"FPDFBookmark_GetFirstChild", &e.bookmarkFirst},
 		{"FPDFBookmark_GetNextSibling", &e.bookmarkNext},
 		{"FPDFBookmark_GetTitle", &e.bookmarkTitle},
@@ -170,8 +173,6 @@ type binding struct {
 func (e *Engine) symbols() []binding {
 	return []binding{
 		{"FPDF_InitLibrary", &e.initLibrary},
-		{"FPDF_LoadMemDocument64", &e.loadDocument},
-		{"FPDF_GetLastError", &e.lastError},
 		{"FPDF_CloseDocument", &e.closeDocument},
 		{"FPDF_GetPageCount", &e.pageCount},
 		{"FPDF_GetDocUserPermissions", &e.userPermissions},

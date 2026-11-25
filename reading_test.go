@@ -21,6 +21,11 @@ func TestPasswordRetryAndExtractionPermissions(t *testing.T) {
 	v.LoadBytes(t.Context(), samplePDF(2), OpenDocument)
 	await(t, updates, view, func() bool { return v.document != 0 })
 	old := v.document
+	id := v.LoadBytesWithOptions(t.Context(), data, LoadOptions{Mode: RefreshDocument, Password: "wrong"})
+	await(t, updates, view, func() bool { return !v.State().Loading })
+	if !errors.Is(v.loadErr, ErrPassword) || v.document != old {
+		t.Fatalf("byte-backed password failure in request %d: %+v", id, v.State())
+	}
 	for _, password := range []string{"", "wrong"} {
 		_, released := v.LoadReaderAt(t.Context(), bytes.NewReader(data), int64(len(data)), LoadOptions{Mode: RefreshDocument, Password: password})
 		await(t, updates, view, func() bool { return !v.State().Loading })

@@ -49,7 +49,7 @@ func (e *Engine) OpenBytes(ctx context.Context, id uint64, data []byte, password
 	if len(data) > MaxPDFBytes {
 		return nil, ErrLimit
 	}
-	return e.open(ctx, &Document{ID: id}, password, func(doc *Document, pass *byte) uintptr {
+	return e.open(ctx, &Document{ID: id}, password, func(doc *Document, pass *byte) (uintptr, cLong) {
 		// PDFium may read this Go memory until the document closes.
 		doc.pin.Pin(&data[0])
 		return e.loadDocument(&data[0], uintptr(len(data)), pass)
@@ -67,7 +67,7 @@ func (e *Engine) OpenReader(ctx context.Context, id uint64, reader io.ReaderAt, 
 		return nil, ErrLimit
 	}
 	source := &fileSource{reader: reader, size: size, release: release}
-	return e.open(ctx, &Document{ID: id, source: source}, password, func(doc *Document, pass *byte) uintptr {
+	return e.open(ctx, &Document{ID: id, source: source}, password, func(_ *Document, pass *byte) (uintptr, cLong) {
 		fileToken++
 		source.token = fileToken
 		fileSources[fileToken] = source
@@ -76,7 +76,7 @@ func (e *Engine) OpenReader(ctx context.Context, id uint64, reader io.ReaderAt, 
 	})
 }
 
-func (e *Engine) open(ctx context.Context, doc *Document, password string, load func(*Document, *byte) uintptr) (*Document, error) {
+func (e *Engine) open(ctx context.Context, doc *Document, password string, load func(*Document, *byte) (uintptr, cLong)) (*Document, error) {
 	if strings.ContainsRune(password, 0) {
 		return nil, fmt.Errorf("%w: password contains NUL", ErrInvalidPDF)
 	}
@@ -95,10 +95,10 @@ func (e *Engine) open(ctx context.Context, doc *Document, password string, load 
 		defer clear(buf)
 		pass = &buf[0]
 	}
-	doc.handle = load(doc, pass)
+	handle, code := load(doc, pass)
+	doc.handle = handle
 	var err error
 	if doc.handle == 0 {
-		code := e.lastError()
 		err = fmt.Errorf("%w (PDFium error %d)", ErrInvalidPDF, code)
 		if code == 4 {
 			err = ErrPassword
