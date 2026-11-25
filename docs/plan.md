@@ -31,6 +31,26 @@ The viewer uses continuous pagination, viewport tiles, and atomic document refre
 - **Performance.** Record a project baseline before the initial release. For later comparisons, use the same hardware, samples, and scripts, and record MyGo and PDFium versions. Run at least 30 cold opens and three scripted gesture runs. Report P50 and P95 for time to first visible bitmap, time to complete the first viewport, gesture frame time, time to sharp output, and peak RSS across the runs. For ordinary documents, later releases must keep P95 first-viewport and gesture frame times within `110%` of the baseline. The `v0.2` zoom benchmark for 10,000 pages should allocate at most `10%` of the baseline per operation. Full-page and tile caches have budgets of 24 MiB and 40 MiB. Track in-flight bitmaps, native heap, and GPU memory separately. A newly displayed document generation must cover the actual viewport.
 - **Native verification.** Check keyboard, mouse, clipboard, DPI changes, and shutdown on macOS, Windows, and Linux under Wayland and X11. Check pinch gestures with suitable hardware on macOS, Windows, and Wayland. Check modifier-wheel and keyboard zoom on X11. Record real-window and installer results for each platform. [MyGo platform input code](https://github.com/egoist/mygo/tree/v0.10.0/internal)
 - **Packaging.** The plugin manifest declares platform-specific PDFium libraries and a shared license notice file. The plugin release tool verifies the pinned upstream archives and library checksums, extracts the release binaries, and consolidates the original notice text. MyGo verifies and bundles both assets during host builds. At runtime the library loads from the app bundle or an explicit path. [MyGo manifest loader](https://github.com/egoist/mygo/blob/v0.10.0/cmd/mygo/natives.go#L45) · [PDFium archives](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8179)
-- **Versions and rollback.** Hosts pin a version and can return to the previous tag if a regression occurs. A SHA-256-verified cache can serve resources during an upstream outage. Publishing assets requires GitHub release permissions. Official macOS installers require signing credentials.
+- **Versions and rollback.** Hosts pin a version and can return to the previous tag if a regression occurs. A SHA-256-verified cache can serve resources during an upstream outage. Official macOS installers require signing credentials.
+
+## Release procedure
+
+1. Set `mygo.json` to the next MyGo PDF version. The plugin manifest can keep using its current PDFium asset release when the binaries and license notices are unchanged. The assets published with `v0.1.1` are the initial shared set.
+2. Run `mise run ci` before tagging. Commit the release changes and push the release commit, then create and push its matching `v*` tag. Go users can fetch a public tag as soon as it is pushed.
+3. The [Release workflow](../.github/workflows/release.yml) checks the tag against `mygo.json`, verifies that the published PDFium assets match the pinned inputs, and runs native integration tests on all six targets. Once both jobs pass, it creates the GitHub Release with generated notes. Rerun a failed workflow for a transient service or download failure. If the tagged source needs a correction, release it under a new patch version.
+
+When changing PDFium, update the pinned upstream version and SHA-256 values in `cmd/pdfium-resources`. When either the binaries or their license notices change, use a new asset tag such as `pdfium-8179-r2` for a revision of the `8179` assets:
+
+```sh
+go run ./cmd/pdfium-resources -release=pdfium-8179-r2
+gh release create pdfium-8179-r2 --latest=false \
+  --title "PDFium 8179 assets (revision 2)" --notes "PDFium binaries and license notices for MyGo PDF." \
+  build/pdfium-release/darwin-*-libpdfium.dylib \
+  build/pdfium-release/linux-*-libpdfium.so \
+  build/pdfium-release/windows-*-pdfium.dll \
+  build/pdfium-release/pdfium-notices.txt
+```
+
+Verify that all seven files are publicly downloadable and match the generated files. Copy `build/pdfium-release/mygo-plugin.json` into the module root and include it in the next MyGo PDF release commit. Keep previously published asset releases available for hosts pinned to earlier Go module versions.
 
 If upstream MyGo adds continuous viewports and atomic refresh, reassess rendering, API, and packaging compatibility. Contribute shared improvements upstream where possible.

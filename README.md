@@ -27,11 +27,11 @@ Call `LoadBytes(ctx, data, pdf.OpenDocument)` with an immutable byte slice to di
 
 With MyGo `v0.10.0` or later, run `mygo dev` or `mygo build` from the host app. MyGo reads the plugin manifest, downloads the native library for the build target and the license notices, verifies their SHA-256 checksums, and packages them with the app. The viewer loads the bundled library at runtime. For direct `go run` or custom packaging, set `Options.LibraryPath` to an absolute library path.
 
-The plugin maintainer prepares release assets from the pinned upstream archives. Run `go run ./cmd/pdfium-resources -release=<tag>` to generate the assets and manifest in `build/pdfium-release`. Copy the generated manifest into the module root and publish its referenced assets with that tag.
+The plugin manifest pins a published PDFium asset release. MyGo PDF versions can share the same six libraries and license notices. See the [release procedure](docs/plan.md#release-procedure) when updating those assets.
 
 ## Verification
 
-`mise run ci` checks Go formatting, Go and MyGo vet, race tests and builds/tests with cgo disabled. The task prepares a verified native PDFium library before running the integration tests. Use `mise run build` for the desktop example package.
+`mise run ci` checks Go formatting, Go and MyGo vet, race tests and builds/tests with cgo disabled. The task prepares a verified native PDFium library before running the integration tests. Pushing a `v*` tag triggers the [Release workflow](.github/workflows/release.yml). It runs PDFium integration tests on all six targets, verifies the referenced assets and publishes the GitHub Release after both checks pass. Use `mise run build` for the desktop example package.
 
 See the [design](docs/design.md) for component contracts and the [development plan](docs/plan.md) for milestones and release criteria.
 

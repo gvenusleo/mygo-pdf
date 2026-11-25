@@ -27,11 +27,11 @@ mise run dev
 
 使用 MyGo `v0.10.0` 或更高版本时，宿主直接运行 `mygo dev` 或 `mygo build`。MyGo 读取插件清单，按目标下载动态库和许可证，校验 SHA-256 后随应用打包。查看器运行时加载包内的库。直接使用 `go run` 或自定义打包时，可通过 `Options.LibraryPath` 指定动态库的绝对路径。
 
-插件维护者从固定的上游归档准备发布资源。运行 `go run ./cmd/pdfium-resources -release=<tag>`，会在 `build/pdfium-release` 生成资源和清单。将生成的清单复制到模块根目录，并用对应标签发布其中引用的资源。
+插件清单固定了已发布的 PDFium 资产版本。多个 MyGo PDF 版本可以共用同一批动态库和许可证。更新资产时，参见[发布流程](docs/plan.md#release-procedure)。
 
 ## 验证
 
-`mise run ci` 执行格式和静态检查、真实 PDFium 竞态测试及无 cgo 测试。用 `mise run build` 构建桌面示例安装包。
+`mise run ci` 执行格式和静态检查、真实 PDFium 竞态测试及无 cgo 测试。推送 `v*` 标签会触发 [Release 工作流](.github/workflows/release.yml)。工作流在六个目标上运行 PDFium 集成测试，校验清单引用的资产，两项检查都通过后自动发布 GitHub Release。用 `mise run build` 构建桌面示例安装包。
 
 组件契约见 [设计文档](docs/design.md)，版本安排和验收标准见 [开发计划](docs/plan.md)。
 

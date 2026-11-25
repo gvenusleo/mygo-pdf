@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  integration:
+    name: PDFium (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin/amd64
+            runner: macos-15-intel
+          - target: darwin/arm64
+            runner: macos-15
+          - target: linux/amd64
+            runner: ubuntu-24.04
+          - target: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: windows/amd64
+            runner: windows-2025
+          - target: windows/arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Prepare PDFium and check the source
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          test "$(go env GOOS)/$(go env GOARCH)" = "$EXPECTED_TARGET"
+          unformatted=$(gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+          go run ./cmd/pdfium-resources -output=build/test-resources
+          go tool mygo vet .
+      - name: Test with the race detector
+        if: matrix.target != 'windows/arm64'
+        env:
+          CGO_ENABLED: '1'
+          MYGO_PDF_REQUIRE_INTEGRATION: '1'
+        run: go test -race -count=1 ./...
+      - name: Test without cgo
+        env:
+          CGO_ENABLED: '0'
+          MYGO_PDF_REQUIRE_INTEGRATION: '1'
+        run: go test -count=1 ./...
+
+  release-assets:
+    name: Verify PDFium assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Check the version and verify the referenced PDFium assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version_tag="v$(jq -er '.version' mygo.json)"
+          if [[ "$GITHUB_REF_NAME" != "$version_tag" ]]; then
+            printf 'Release tag %s does not match app version %s\n' "$GITHUB_REF_NAME" "$version_tag" >&2
+            exit 1
+          fi
+
+          asset_tag=$(jq -er --arg prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/" '
+            [.libraries[].files[].url | select(startswith($prefix)) | ltrimstr($prefix) | split("/")[0]]
+            | unique
+            | if length == 1 and .[0] != "" then .[0]
+              else error("expected one PDFium asset release tag in mygo-plugin.json") end
+          ' mygo-plugin.json)
+          go run ./cmd/pdfium-resources -release="$asset_tag"
+          diff -u mygo-plugin.json build/pdfium-release/mygo-plugin.json
+
+          if [[ "$(gh release view "$asset_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != false ]]; then
+            printf 'PDFium asset release %s must be published\n' "$asset_tag" >&2
+            exit 1
+          fi
+          published=$(mktemp -d)
+          trap 'rm -rf "$published"' EXIT
+          gh release download "$asset_tag" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          for asset in build/pdfium-release/darwin-* build/pdfium-release/linux-* \
+                       build/pdfium-release/windows-* build/pdfium-release/pdfium-notices.txt; do
+            cmp "$asset" "$published/${asset##*/}"
+          done
+
+  publish:
+    name: Publish GitHub Release
+    needs: [integration, release-assets]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == false ]]; then
+              printf 'Release %s is already published\n' "$tag"
+              exit 0
+            fi
+            printf 'Release %s already exists as a draft\n' "$tag" >&2
+            exit 1
+          fi
+          set --
+          if [[ "$tag" == *-* ]]; then
+            set -- --prerelease
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --generate-notes --title "MyGo PDF $tag" "$@"
