@@ -1,6 +1,10 @@
 [tools]
 go = "1.27.4"
 
+[tasks.skills]
+description = "Update agent skills"
+run = "npx skills update -p -y && go tool mygo install-skills"
+
 [tasks.resources]
 run = "go run ./cmd/pdfium-resources -output=build/test-resources"
 
