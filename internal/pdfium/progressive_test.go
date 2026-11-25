@@ -28,7 +28,7 @@ func TestProgressiveRenderClosesOnCancellation(t *testing.T) {
 		renderClose: func(uintptr) { closed++ },
 	}
 	mu.Lock()
-	err := e.drawProgressive(ctx, 1, 2, 0, 0, 100, 100, 0, false)
+	err := e.drawProgressive(ctx, 1, 2, 0, 0, 100, 100, 0, 0, false)
 	mu.Unlock()
 	if !errors.Is(err, context.Canceled) || closed != 1 {
 		t.Fatalf("canceled render returned %v and closed %d times", err, closed)
@@ -152,18 +152,24 @@ func TestProgressiveMatchesSynchronousPDFium(t *testing.T) {
 		resumes++
 		return e.renderContinue(page, pause)
 	}
-	for _, tile := range []image.Rectangle{{}, image.Rect(140, 200, 600, 650)} {
-		key := render.Key{Document: 1, Size: image.Pt(720, 1020), Tile: tile}
-		got, err := progressive.Render(t.Context(), doc, key, false)
-		if err != nil {
-			t.Fatal(err)
+	for rotation := range 4 {
+		size := image.Pt(720, 1020)
+		if rotation%2 != 0 {
+			size.X, size.Y = size.Y, size.X
 		}
-		want, err := syncEngine.Render(t.Context(), doc, key, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(got.Pix, want.Pix) {
-			t.Fatalf("progressive pixels differ for raster tile %v", tile)
+		for _, tile := range []image.Rectangle{{}, image.Rect(140, 200, 600, 650)} {
+			key := render.Key{Document: 1, Size: size, Tile: tile, Rotation: rotation}
+			got, err := progressive.Render(t.Context(), doc, key, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := syncEngine.Render(t.Context(), doc, key, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got.Pix, want.Pix) {
+				t.Fatalf("progressive pixels differ at rotation %d for raster tile %v", rotation, tile)
+			}
 		}
 	}
 	if pauses == 0 || resumes == 0 {

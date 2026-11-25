@@ -13,7 +13,7 @@ MYGO_PDF_REQUIRE_INTEGRATION=1 MYGO_PDF_MEASURE=open \
 go test -run '^$' -bench '^BenchmarkZoom10000Pages$' -benchmem -count=10 .
 ```
 
-Replace `open` with `gesture` for gesture runs. The fixture names are `ordinary`, `mixed`, `scan`, and `long`. To run the same test against the older revisions, use a temporary checkout, copy `performance_test.go`, and copy the `encodePDF` helper from `viewer_test.go` into a test file in that checkout. For the older zoom benchmark, copy only `BenchmarkZoom10000Pages` into a test file because the anchor tests use the new layout geometry.
+Replace `open` with `gesture` for gesture runs. The byte-backed fixture names are `ordinary`, `mixed`, `scan`, and `long`. For v0.2.1, run the test from that tag's checkout. For the historical v0.1.1 and 62025b3 comparisons, restore the harness from `git show v0.2.1:performance_test.go` in a temporary checkout and copy the `encodePDF` helper from v0.2.1's `viewer_test.go` into a test file there. For the historical zoom benchmark, copy only `BenchmarkZoom10000Pages` from v0.2.1's `layout_test.go`.
 
 ## Measurements
 
@@ -37,3 +37,30 @@ Each row reports P50/P95 from 30 fresh opens and three gesture runs. Times are i
 `BenchmarkZoom10000Pages` performs two zoom changes per operation. Both baselines allocated 327,680 bytes per operation, and the candidate allocated zero. Median operation times were 41,377 ns for v0.1.1, 42,485 ns for 62025b3, and 103 ns for the candidate.
 
 The candidate meets the allocation target and both ordinary-document P95 targets. The ordinary first viewport was 100.4% of the release baseline and the gesture frame was 75.6%. The ordinary cold-open refinement reached P95 in 66.11 ms, up from 57.87 ms. Mixed-size gesture RSS rose to 137.80 MiB at P95 with nearby tile retention. These headless results measure CPU rendering. Native window timing and GPU memory were outside this measurement.
+
+## v0.3.0 comparison
+
+The same Apple M3, macOS 27.2.1, Go 1.27.4, MyGo v0.10.0, and PDFium chromium/8179 were used for the `v0.2.1` and `v0.3.0` builds. The opt-in harness interleaved builds, took 30 fresh opens and three gesture runs per fixture, and used nearest-rank percentiles. Reader runs use a measured `bytes.Reader` to isolate the callback path from filesystem cache behavior. The `long-mixed` fixture has 10,000 pages with late wide, tall, and cropped pages. Its byte-backed reference uses the candidate's eager loading path.
+
+| Fixture | Source and build | First bitmap | Full viewport | Open sharp | Open RSS | Gesture frame | Gesture sharp | Gesture RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ordinary | v0.2.1 bytes | 18.21/20.72 | 18.21/20.72 | 50.98/60.81 | 49.67/49.91 | 1.94/4.66 | 1.94/30.84 | 75.58/75.88 |
+| Ordinary | v0.3.0 bytes | 18.20/21.72 | 18.20/21.72 | 51.07/65.17 | 49.88/50.12 | 2.79/7.99 | 2.79/35.34 | 83.30/83.73 |
+| Ordinary | v0.3.0 reader | 18.11/20.50 | 18.11/20.50 | 50.89/56.71 | 45.92/46.20 | 2.04/5.06 | 2.04/32.92 | 67.56/67.72 |
+| Mixed sizes | v0.2.1 bytes | 15.69/17.37 | 15.69/17.37 | 30.00/33.43 | 50.20/50.41 | 3.67/4.23 | 11.25/38.03 | 137.55/137.70 |
+| Mixed sizes | v0.3.0 bytes | 15.66/16.99 | 15.66/16.99 | 29.95/33.68 | 50.22/50.48 | 3.65/4.29 | 11.16/37.96 | 137.78/142.22 |
+| Mixed sizes | v0.3.0 reader | 15.58/17.41 | 15.58/17.41 | 29.93/33.60 | 48.09/48.33 | 3.63/4.14 | 11.22/38.12 | 137.50/137.70 |
+| Synthetic scan | v0.2.1 bytes | 10.08/11.86 | 10.08/11.86 | 42.80/49.68 | 48.09/48.50 | 4.06/7.81 | 4.07/43.82 | 69.77/70.41 |
+| Synthetic scan | v0.3.0 bytes | 10.08/13.40 | 10.08/13.40 | 42.81/52.33 | 48.38/48.75 | 4.04/7.79 | 4.05/43.70 | 70.45/70.47 |
+| Synthetic scan | v0.3.0 reader | 10.09/12.27 | 10.09/12.27 | 42.76/51.88 | 48.44/48.77 | 4.03/7.81 | 4.05/43.85 | 70.12/70.59 |
+| 10,000 pages | v0.2.1 bytes | 52.44/57.15 | 52.44/57.15 | 85.30/95.46 | 63.30/64.08 | 1.70/4.46 | 1.70/30.67 | 91.81/92.06 |
+| 10,000 pages | v0.3.0 bytes | 52.84/57.35 | 52.84/57.35 | 85.43/92.65 | 63.17/63.98 | 1.82/4.45 | 1.82/30.35 | 98.89/99.20 |
+| 10,000 pages | v0.3.0 reader | 20.24/22.87 | 20.24/22.87 | 52.82/58.46 | 50.70/51.12 | 1.70/4.44 | 1.71/30.73 | 72.11/72.31 |
+| 10,000 mixed pages | v0.3.0 bytes | 26.59/27.98 | 26.59/27.98 | 29.09/30.70 | 46.08/46.69 | 1.90/4.28 | 2.09/6.57 | 67.23/67.77 |
+| 10,000 mixed pages | v0.3.0 reader | 6.83/10.20 | 6.83/10.20 | 38.38/44.93 | 47.30/47.81 | 1.57/4.34 | 1.57/29.57 | 69.08/69.17 |
+
+The uniform long document reached a complete viewport at 40.0% of the paired v0.2.1 P95, with one explicit page-size probe and 198 reads totaling 294,047 bytes. The mixed long document used one probe and 192 reads totaling 291,330 bytes. Separate 30-process runs timed PDFium's custom open and page count at 1.90/2.71 ms for the uniform fixture and 1.90/1.97 ms for the mixed fixture. The mixed long fixture reached the first viewport earlier with the reader and took longer to reach sharp output as its dimensions settled.
+
+Ordinary gesture runs were sensitive to a few slow frames. The first three-run set measured 7.60 ms P95 on the reader. The comparison above measured 7.99 ms on bytes. A larger isolated set of 12 runs per source measured 1.89/4.81 ms for v0.2.1, 1.85/4.66 ms for candidate bytes, and 1.71/4.46 ms for the reader. Both candidate paths met the 6.53 ms target in that set. Ordinary refinement on bytes still exceeds the original v0.1.1 result. Mixed-size gesture RSS rose by 3.3% on bytes compared with paired v0.2.1 and was equal on the reader. Whole-document zoom still allocates zero bytes per operation.
+
+For reader runs, set `MYGO_PDF_MEASURE_SOURCE=reader`. To isolate the native open, set `MYGO_PDF_MEASURE=native`. Use `TestViewerPerformance/long-mixed` to select the new mixed-size case. The headless harness measures CPU rendering and process RSS.

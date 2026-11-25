@@ -10,7 +10,7 @@ Write all project-authored material in English. This includes source comments, G
 
 - Prefer the standard library and existing MyGo components. Add abstractions, options, and dependencies when a caller needs them.
 - Update the design and agree on the direction before changing the public API, input ownership, shutdown or refresh behavior, supported platforms, or packaging. Fix deviations from an existing contract against the documented behavior.
-- The component loads PDF bytes, displays pages, and handles navigation. The host owns file monitoring, path authorization, compilation, export, and external opening policy. The library is read-only.
+- The component loads PDF bytes and local random-access sources, displays pages, and handles navigation. The host owns file monitoring, path authorization, compilation, export, and external opening policy. The library is read-only.
 - Keep API behavior and Go documentation in sync. Verify changes through the standalone example and keep host-specific types outside the component.
 
 ## Packages and code
@@ -23,7 +23,7 @@ Write all project-authored material in English. This includes source comments, G
 ## Lifecycle and rendering
 
 - Read and write UI state on the window thread. Pass snapshots to workers and publish results through `Window.Update`. Use stable `c.Key` values. Keep state, handles, or services across builds. `ui.Element`, builder parts, and `*ui.Context` are scoped to view construction.
-- `LoadBytes` takes ownership of immutable input. Keep its address pinned while PDFium can read it. Release page handles before the document handle, then unpin the input. Serialize all PDFium calls within the process.
+- `LoadBytes` takes ownership of immutable input. Keep its address pinned while PDFium can read it. `LoadReaderAt` borrows a stable source. The host may close it after the release channel closes. Release page and text handles before the document handle, then unpin bytes or release the reader. Serialize all PDFium calls within the process.
 - Check cancellation before starting a load. Before applying a result, check the request generation, document generation, and current viewport demand. Prepare the visible pages for a refresh, then replace the layout and images together.
 - Deliver `OnChange` after committing viewer state. Callback code may clear, close, or reload the viewer. `Close` is idempotent and returns immediately. `Done` signals that the worker has released the document. Wait for it off the UI thread.
 - Use MyGo native components and theme values. Run slow I/O and native rendering in the background. When changing scheduling or caching, verify visible-page priority, cancellation, and memory budgets.

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"github.com/gvenusleo/mygo-pdf/internal/render"
@@ -31,15 +33,52 @@ type Document struct {
 	pin          runtime.Pinner
 	Pages        []PageSize
 	copy         bool
+	accessible   bool
+	source       *fileSource
 	contentAreas map[int]Rect
 }
 
 func (e *Engine) Open(ctx context.Context, id uint64, data []byte) (*Document, error) {
+	return e.OpenBytes(ctx, id, data, "")
+}
+
+func (e *Engine) OpenBytes(ctx context.Context, id uint64, data []byte, password string) (*Document, error) {
 	if len(data) == 0 {
 		return nil, ErrInvalidPDF
 	}
 	if len(data) > MaxPDFBytes {
 		return nil, ErrLimit
+	}
+	return e.open(ctx, &Document{ID: id}, password, func(doc *Document, pass *byte) uintptr {
+		// PDFium may read this Go memory until the document closes.
+		doc.pin.Pin(&data[0])
+		return e.loadDocument(&data[0], uintptr(len(data)), pass)
+	})
+}
+
+func (e *Engine) OpenReader(ctx context.Context, id uint64, reader io.ReaderAt, size int64, password string, release func()) (*Document, error) {
+	if e.loadCustom == nil {
+		return nil, fmt.Errorf("%w: PDFium reader loading unavailable", ErrUnsupported)
+	}
+	if reader == nil || size <= 0 {
+		return nil, ErrInvalidPDF
+	}
+	if size > MaxPDFBytes {
+		return nil, ErrLimit
+	}
+	source := &fileSource{reader: reader, size: size, release: release}
+	return e.open(ctx, &Document{ID: id, source: source}, password, func(doc *Document, pass *byte) uintptr {
+		fileToken++
+		source.token = fileToken
+		fileSources[fileToken] = source
+		access := fileAccess{length: cLong(size), read: fileReader(), token: fileToken}
+		return e.loadCustom(&access, pass)
+	})
+}
+
+func (e *Engine) open(ctx context.Context, doc *Document, password string, load func(*Document, *byte) uintptr) (*Document, error) {
+	if strings.ContainsRune(password, 0) {
+		return nil, fmt.Errorf("%w: password contains NUL", ErrInvalidPDF)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -48,23 +87,34 @@ func (e *Engine) Open(ctx context.Context, id uint64, data []byte) (*Document, e
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	doc := &Document{ID: id}
-	// PDFium may read this Go memory until the document closes.
-	doc.pin.Pin(&data[0])
-	doc.handle = e.loadDocument(&data[0], uintptr(len(data)), nil)
-	if doc.handle == 0 {
-		doc.pin.Unpin()
-		code := e.lastError()
-		if code == 4 {
-			return nil, ErrPassword
-		}
-		return nil, fmt.Errorf("%w (PDFium error %d)", ErrInvalidPDF, code)
+	doc.startRead(ctx)
+	var pass *byte
+	if password != "" {
+		buf := make([]byte, len(password)+1)
+		copy(buf, password)
+		defer clear(buf)
+		pass = &buf[0]
 	}
-	if err := e.readPages(ctx, doc); err != nil {
+	doc.handle = load(doc, pass)
+	var err error
+	if doc.handle == 0 {
+		code := e.lastError()
+		err = fmt.Errorf("%w (PDFium error %d)", ErrInvalidPDF, code)
+		if code == 4 {
+			err = ErrPassword
+		}
+	} else {
+		err = e.readPages(ctx, doc)
+		permissions := e.userPermissions(doc.handle)
+		doc.copy, doc.accessible = permissions&16 != 0, permissions&(1<<9) != 0
+	}
+	if readErr := doc.finishRead(); readErr != nil {
+		err = readErr
+	}
+	if err != nil {
 		e.close(doc)
 		return nil, err
 	}
-	doc.copy = e.userPermissions(doc.handle)&16 != 0
 	return doc, nil
 }
 
@@ -77,16 +127,41 @@ func (e *Engine) readPages(ctx context.Context, doc *Document) error {
 		return fmt.Errorf("%w: %d pages", ErrLimit, count)
 	}
 	doc.Pages = make([]PageSize, count)
+	if doc.source != nil {
+		return nil
+	}
 	for i := range doc.Pages {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		size := &doc.Pages[i]
-		if e.pageSize(doc.handle, int32(i), size) == 0 || !validSize(size.Width) || !validSize(size.Height) {
-			return fmt.Errorf("%w: cannot read dimensions of page %d", ErrInvalidPDF, i+1)
+		size, err := e.readSize(doc, i)
+		if err != nil {
+			return err
 		}
+		doc.Pages[i] = size
 	}
 	return nil
+}
+
+func (e *Engine) readSize(doc *Document, index int) (size PageSize, err error) {
+	if e.pageSize(doc.handle, int32(index), &size) == 0 || !validSize(size.Width) || !validSize(size.Height) {
+		return PageSize{}, fmt.Errorf("%w: cannot read dimensions of page %d", ErrInvalidPDF, index+1)
+	}
+	return size, nil
+}
+
+func (e *Engine) ReadPageSize(ctx context.Context, doc *Document, index int, background bool) (size PageSize, err error) {
+	mu.lock(ctx, background)
+	defer mu.Unlock()
+	if err = ctx.Err(); err != nil {
+		return size, err
+	}
+	doc.startRead(ctx)
+	size, err = e.readSize(doc, index)
+	if readErr := doc.finishRead(); readErr != nil {
+		return PageSize{}, readErr
+	}
+	return size, err
 }
 
 func validSize(size float32) bool {
@@ -95,8 +170,15 @@ func validSize(size float32) bool {
 
 func (e *Engine) close(doc *Document) {
 	if doc != nil {
-		e.closeDocument(doc.handle)
+		if doc.handle != 0 {
+			e.closeDocument(doc.handle)
+		}
 		doc.pin.Unpin()
+		if doc.source != nil {
+			delete(fileSources, doc.source.token)
+			doc.source.release()
+			doc.source = nil
+		}
 	}
 }
 
@@ -129,16 +211,16 @@ func (e *Engine) drawPage(ctx context.Context, page uintptr, key render.Key, bac
 	x, y := -int32(region.Min.X), -int32(region.Min.Y)
 	fullWidth, fullHeight := int32(key.Size.X), int32(key.Size.Y)
 	if e.HasProgressiveRendering() {
-		if err := e.drawProgressive(ctx, bitmap, page, x, y, fullWidth, fullHeight, annotations|reverseByteOrder, background); err != nil {
+		if err := e.drawProgressive(ctx, bitmap, page, x, y, fullWidth, fullHeight, int32(key.Rotation), annotations|reverseByteOrder, background); err != nil {
 			return nil, err
 		}
 	} else {
-		e.renderBitmap(bitmap, page, x, y, fullWidth, fullHeight, 0, annotations|reverseByteOrder)
+		e.renderBitmap(bitmap, page, x, y, fullWidth, fullHeight, int32(key.Rotation), annotations|reverseByteOrder)
 	}
 	return img, nil
 }
 
-func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key, background bool) (*image.RGBA, error) {
+func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key, background bool) (pixels *image.RGBA, err error) {
 	if !acquireRenderSlot(ctx, background) {
 		return nil, ctx.Err()
 	}
@@ -148,6 +230,12 @@ func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key, back
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	doc.startRead(ctx)
+	defer func() {
+		if readErr := doc.finishRead(); readErr != nil {
+			pixels, err = nil, readErr
+		}
+	}()
 	page := e.loadPage(doc.handle, int32(key.Page))
 	if page == 0 {
 		return nil, fmt.Errorf("cannot read PDF page %d", key.Page+1)

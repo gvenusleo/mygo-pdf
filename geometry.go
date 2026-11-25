@@ -14,6 +14,7 @@ type geometryKey struct {
 type cachedGeometry struct {
 	data  *geometry
 	bytes int
+	err   error
 }
 
 const maxCachedGeometryPages = 128
@@ -28,7 +29,7 @@ func (v *Viewer) metadataRequests(first, last int) []geometryKey {
 	}
 	var keys []geometryKey
 	for page := first; page <= last && remaining >= render.PageMetadata; page++ {
-		if _, ok := v.metadata[page]; !ok {
+		if _, ok := v.metadata[page]; !ok && v.layout.geometry.exact(page) {
 			remaining -= render.PageMetadata
 			keys = append(keys, geometryKey{v.document, page})
 		}
@@ -41,7 +42,7 @@ func (v *Viewer) resetMetadata() {
 	v.metadataOrder, v.metadataWanted, v.metadataBytes = nil, nil, 0
 }
 
-func (v *Viewer) finishMetadata(key geometryKey, data *geometry) bool {
+func (v *Viewer) finishMetadata(key geometryKey, data *geometry, err error) bool {
 	if key.document != v.document || !slices.Contains(v.metadataWanted, key) {
 		return false
 	}
@@ -59,7 +60,7 @@ func (v *Viewer) finishMetadata(key geometryKey, data *geometry) bool {
 	if data != nil {
 		bytes = data.Bytes()
 	}
-	v.metadata[key.page] = cachedGeometry{data, bytes}
+	v.metadata[key.page] = cachedGeometry{data: data, bytes: bytes, err: err}
 	v.metadataOrder = append(v.metadataOrder, key.page)
 	v.metadataBytes += bytes
 	last = min(last, first+maxCachedGeometryPages-1)

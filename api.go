@@ -2,8 +2,10 @@ package pdf
 
 import (
 	"context"
+	"io"
 	"math"
 	"slices"
+	"sync"
 
 	"github.com/egoist/mygo"
 )
@@ -16,13 +18,20 @@ const (
 	FitPage
 )
 
-// LoadMode determines whether the incoming bytes replace the document or refresh it in place.
+// LoadMode determines whether a load replaces the document or refreshes it in place.
 type LoadMode uint8
 
 const (
 	OpenDocument LoadMode = iota
 	RefreshDocument
 )
+
+// LoadOptions controls how a PDF is opened or refreshed.
+type LoadOptions struct {
+	Mode LoadMode
+	// Password is the optional PDF password. Embedded NUL characters are invalid.
+	Password string
+}
 
 // RenderState describes the currently visible portion of the displayed document.
 type RenderState uint8
@@ -44,6 +53,8 @@ type State struct {
 	Page, PageCount     int
 	Zoom                float32
 	Fit                 Fit
+	Rotation            int
+	Find                FindState
 	Loading             bool
 	Render              RenderState
 	Err                 error
@@ -100,10 +111,36 @@ func NewViewer(win *mygo.Window, options Options) *Viewer {
 // Refreshing a previously measured document waits for the viewer's current layout.
 // Zero means the request was already canceled or the viewer was closed.
 func (v *Viewer) LoadBytes(ctx context.Context, data []byte, mode LoadMode) uint64 {
+	return v.LoadBytesWithOptions(ctx, data, LoadOptions{Mode: mode})
+}
+
+// LoadBytesWithOptions schedules a PDF from immutable bytes, with an optional password.
+// It takes ownership of data under the same contract as LoadBytes.
+func (v *Viewer) LoadBytesWithOptions(ctx context.Context, data []byte, options LoadOptions) uint64 {
+	return v.load(ctx, &loadJob{data: data, password: options.Password}, options.Mode)
+}
+
+// LoadReaderAt schedules a PDF from a local random-access source. The caller
+// keeps the reader open and its contents stable until released closes, then
+// closes it if needed. ReadAt should return promptly and avoid reentering the
+// viewer. Canceling a completed load does not release its displayed source.
+// The input size and page count limits also apply to this method.
+// A rejected request returns zero and an already-closed channel.
+func (v *Viewer) LoadReaderAt(ctx context.Context, reader io.ReaderAt, size int64, options LoadOptions) (generation uint64, released <-chan struct{}) {
+	done := make(chan struct{})
+	release := sync.OnceFunc(func() { close(done) })
+	job := &loadJob{reader: reader, size: size, password: options.Password, release: release}
+	return v.load(ctx, job, options.Mode), done
+}
+
+func (v *Viewer) load(ctx context.Context, job *loadJob, mode LoadMode) uint64 {
 	if v.closed || ctx.Err() != nil {
+		job.releaseSource()
 		return 0
 	}
 	v.stopLoad()
+	v.cancelOutlineRequest()
+	v.clearFind()
 	if mode != RefreshDocument {
 		v.clearDocument()
 	}
@@ -120,7 +157,8 @@ func (v *Viewer) LoadBytes(ctx context.Context, data []byte, mode LoadMode) uint
 			}
 		})
 	})
-	v.worker.submitLoad(&loadJob{ctx: ctx, id: id, data: data, viewport: v.loadViewport()})
+	job.ctx, job.id, job.viewport = ctx, id, v.loadViewport()
+	v.worker.submitLoad(job)
 	v.redraw()
 	return id
 }
@@ -130,23 +168,32 @@ func (v *Viewer) stopLoad() {
 	if v.cancelLoad != nil {
 		v.stopCancellation()
 		v.cancelLoad()
+		v.worker.cancelQueuedLoad(v.loadID)
 		v.cancelLoad, v.stopCancellation = nil, nil
 	}
 }
 
 // State returns the current document, viewport, load and render status.
 func (v *Viewer) State() State {
-	s := State{RequestGeneration: v.loadID, DisplayedGeneration: v.document, PageCount: len(v.pages), Zoom: v.zoom, Fit: v.fit, Loading: v.cancelLoad != nil, Err: v.loadErr}
+	s := State{RequestGeneration: v.loadID, DisplayedGeneration: v.document, PageCount: len(v.pages), Zoom: v.zoom, Fit: v.fit,
+		Rotation: v.rotation, Find: v.findState, Loading: v.cancelLoad != nil, Err: v.loadErr}
 	if len(v.pages) == 0 {
 		return s
+	}
+	if s.Err == nil {
+		s.Err = v.interactionErr
 	}
 	s.Page = v.currentPage() + 1
 	s.Render = RenderReady
 	first, last := v.visiblePages()
 	var demand pageRasterDemand
 	for i := first; i <= last; i++ {
+		entry := v.cache[i]
+		if s.Err == nil && len(v.metadata) > 0 {
+			s.Err = v.metadata[i].err
+		}
 		var rasterErr error
-		if v.cache[i].err != nil {
+		if entry.err != nil || (v.layout.geometry.lazy != nil && v.layout.geometry.lazy.failed[i] != nil) {
 			if demand.budget == 0 {
 				demand = v.pageRasterDemand(first, last)
 			}
@@ -157,7 +204,7 @@ func (v *Viewer) State() State {
 			if s.Err == nil {
 				s.Err = rasterErr
 			}
-		} else if v.cache[i].frame == nil && s.Render != RenderFailed {
+		} else if entry.frame == nil && s.Render != RenderFailed {
 			s.Render = RenderPending
 		}
 	}
@@ -215,17 +262,19 @@ func (v *Viewer) notify() {
 }
 
 // GoToPage selects a one-based page and scrolls toward its top as far as the layout permits.
-// It returns false for an invalid page.
+// An unmeasured target is selected after its dimensions are available.
+// It returns false for an invalid page. Deferred navigation errors appear in State.Err.
 func (v *Viewer) GoToPage(page int) bool {
 	if page < 1 || page > len(v.pages) {
 		return false
 	}
-	y := float32(0)
-	if page > 1 {
-		y = v.layout.page(page - 1).Y
-	}
-	v.navigateTo(page, y)
-	v.redraw()
+	v.navigateToWhenSized(page-1, func() {
+		y := float32(0)
+		if page > 1 {
+			y = v.layout.page(page - 1).Y
+		}
+		v.navigateTo(page, y)
+	})
 	return true
 }
 

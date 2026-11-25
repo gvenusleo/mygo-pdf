@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf/internal/pdfium"
 )
 
 // View builds the scrollable viewer. Change layoutKey when the parent geometry changes.
@@ -31,6 +32,10 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 		v.navigation = pageNavigation{}
 	}
 	if len(v.pages) == 0 {
+		if v.focusedLink.document != 0 && scroll.FocusWithin() {
+			scroll.Focusable().Focus()
+		}
+		v.focusedLink = semanticLinkKey{}
 		return
 	}
 	services := c.Services()
@@ -41,6 +46,8 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 		}
 	})
 	first, last := v.visiblePages()
+	previousFocus, hadFocus := v.focusedLink, scroll.FocusWithin()
+	v.focusedLink = semanticLinkKey{}
 	demand := v.requestVisible(first, last)
 	v.notify()
 	scroll.Children(func() {
@@ -50,6 +57,9 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 			}
 		})
 	})
+	if hadFocus && previousFocus.document != 0 && v.focusedLink.document == 0 && !v.hasSemanticLink(previousFocus, first, last) {
+		scroll.Focus()
+	}
 }
 
 func (v *Viewer) contextMenu(m *ui.Menu, services ui.Services) {
@@ -101,23 +111,41 @@ func (v *Viewer) pageView(c *ui.Context, index int, demand pageRasterDemand) {
 	if data != nil && frame != nil {
 		page.HandleInput(v.pageInput(v.document, index, data, r))
 		if x, y, over := page.PointerPosition(); over {
+			point := rotatedPoint(pdfium.Point{X: x / r.W, Y: y / r.H}, -v.rotation)
 			switch {
-			case linkAt(data, x/r.W, y/r.H) >= 0:
+			case linkAt(data, point.X, point.Y) >= 0:
 				page.Cursor(ui.CursorPointer)
-			case characterAt(data, x/r.W, y/r.H, false) >= 0:
+			case characterAt(data, point.X, point.Y, false) >= 0:
 				page.Cursor(ui.CursorText)
 			}
 		}
 	}
 	page.Children(func() {
 		if frame != nil && !v.tilesCoverViewport(index, r) {
-			ui.Image(c, frame.bitmap).Absolute().Size(r.W, r.H).AccessHidden(true)
+			v.previewImage(c, frame, r)
 		}
 		v.tileViews(c, index, r)
-		if data != nil && frame != nil {
-			v.highlight(c, index, data, r)
+		if frame != nil {
+			v.findHighlight(c, index, r)
+			if data != nil {
+				v.highlight(c, index, data, r)
+				v.pageSemantics(c, index, r, data)
+			}
 		}
 	})
+}
+
+func (v *Viewer) previewImage(c *ui.Context, frame *pageFrame, bounds ui.Rect) {
+	rotation := (v.rotation - frame.key.Rotation) & 3
+	w, h := bounds.W, bounds.H
+	if rotation%2 != 0 {
+		w, h = h, w
+	}
+	image := ui.Image(c, frame.bitmap).Absolute().Left((bounds.W-w)/2).Top((bounds.H-h)/2).
+		Size(w, h).PassThrough().AccessHidden(true)
+	if rotation != 0 {
+		image.Rotate(float32(rotation * 90))
+	}
 }
 
 func (v *Viewer) tilesCoverViewport(page int, bounds ui.Rect) bool {
@@ -166,6 +194,10 @@ func (v *Viewer) highlight(c *ui.Context, page int, data *geometry, bounds ui.Re
 		end = min(end, v.selection.Last.Index+1)
 	}
 	color := c.Theme().Selection
+	canonicalBounds := bounds
+	if v.rotation%2 != 0 {
+		canonicalBounds.W, canonicalBounds.H = bounds.H, bounds.W
+	}
 	var line, previous ui.Rect
 	var wasVertical bool
 	for i := min(start, end); i < end; i++ {
@@ -177,16 +209,16 @@ func (v *Viewer) highlight(c *ui.Context, page int, data *geometry, bounds ui.Re
 		if rect.W <= 0 || rect.H <= 0 {
 			continue
 		}
-		if line.W > 0 && vertical == wasVertical && sameSelectionLine(previous, rect, bounds, vertical) {
+		if line.W > 0 && vertical == wasVertical && sameSelectionLine(previous, rect, canonicalBounds, vertical) {
 			x, y := min(line.X, rect.X), min(line.Y, rect.Y)
 			line = ui.Rect{X: x, Y: y, W: max(line.X+line.W, rect.X+rect.W) - x, H: max(line.Y+line.H, rect.Y+rect.H) - y}
 		} else {
-			highlightRect(c, line, bounds, color)
+			v.paintHighlight(c, pdfium.Rect(line), bounds, color)
 			line = rect
 		}
 		previous, wasVertical = rect, vertical
 	}
-	highlightRect(c, line, bounds, color)
+	v.paintHighlight(c, pdfium.Rect(line), bounds, color)
 }
 
 func sameSelectionLine(a, b, page ui.Rect, vertical bool) bool {

@@ -3,6 +3,8 @@
 package pdfium
 
 import (
+	"unsafe"
+
 	"github.com/ebitengine/purego"
 	"golang.org/x/sys/windows"
 )
@@ -10,6 +12,10 @@ import (
 type cLong = uint32
 
 func newPauseCallback(fn func(uintptr) uintptr) uintptr { return purego.NewCallback(fn) }
+
+func newFileCallback(fn func(uintptr, cLong, unsafe.Pointer, cLong) uintptr) uintptr {
+	return purego.NewCallback(fn)
+}
 
 func openLibrary(path string) (library, error) {
 	handle, err := windows.LoadLibraryEx(path, 0, windows.LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|windows.LOAD_LIBRARY_SEARCH_SYSTEM32)

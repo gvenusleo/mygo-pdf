@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 // Opt-in headless workload. Run each subtest in a fresh process to measure RSS.
 func TestViewerPerformance(t *testing.T) {
 	mode := os.Getenv("MYGO_PDF_MEASURE")
-	if mode != "open" && mode != "gesture" {
-		t.Skip("set MYGO_PDF_MEASURE to open or gesture")
+	if mode != "open" && mode != "gesture" && mode != "native" {
+		t.Skip("set MYGO_PDF_MEASURE to open, gesture, or native")
 	}
 	for _, fixture := range []struct {
 		name string
@@ -28,20 +29,31 @@ func TestViewerPerformance(t *testing.T) {
 		}},
 		{"scan", performanceScan},
 		{"long", func() []byte { return samplePDF(10_000) }},
+		{"long-mixed", longMixedPDF},
 	} {
 		t.Run(fixture.name, func(t *testing.T) { measureViewer(t, fixture.pdf(), mode) })
 	}
 }
 
 func measureViewer(t *testing.T, data []byte, mode string) {
+	if mode == "native" {
+		measureNativeOpen(t, data)
+		return
+	}
 	updates := make(chan func(), 12)
 	v := newViewer(func(fn func()) { updates <- fn }, testEngine(t))
 	t.Cleanup(func() { v.Close(); <-v.Done() })
 	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil) }, 900, 700)
 	view.Frame()
 	v.setScale(2)
+	reader := &measuredReader{Reader: bytes.NewReader(data)}
+	readerBacked := os.Getenv("MYGO_PDF_MEASURE_SOURCE") == "reader"
 	start := time.Now()
-	v.LoadBytes(t.Context(), data, OpenDocument)
+	if readerBacked {
+		v.LoadReaderAt(t.Context(), reader, int64(len(data)), LoadOptions{})
+	} else {
+		v.LoadBytes(t.Context(), data, OpenDocument)
+	}
 	var firstBitmap, complete time.Duration
 	await(t, updates, view, func() bool {
 		if v.document == 0 {
@@ -60,6 +72,9 @@ func measureViewer(t *testing.T, data []byte, mode string) {
 			return false
 		}
 		complete = time.Since(start)
+		if g := v.layout.geometry.lazy; g != nil {
+			t.Logf("measure source probes=%d reads=%d bytes=%d", g.nodes[1].count, reader.calls.Load(), reader.total.Load())
+		}
 		return true
 	})
 	await(t, updates, view, func() bool { return v.State().Render == RenderReady })
@@ -82,6 +97,34 @@ func measureViewer(t *testing.T, data []byte, mode string) {
 			t.Logf("measure gesture frame=%d sharp=%d", frame.Nanoseconds(), time.Since(start).Nanoseconds())
 		}
 	}
+}
+
+func measureNativeOpen(t *testing.T, data []byte) {
+	e, err := testEngine(t)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &measuredReader{Reader: bytes.NewReader(data)}
+	// Time the custom open and page count separately from viewer and raster work.
+	start := time.Now()
+	doc, err := e.OpenReader(t.Context(), 1, reader, int64(len(data)), "", func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("measure native=%d reads=%d bytes=%d", time.Since(start).Nanoseconds(), reader.calls.Load(), reader.total.Load())
+	e.Close(doc)
+}
+
+type measuredReader struct {
+	*bytes.Reader
+	calls, total atomic.Int64
+}
+
+func (reader *measuredReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := reader.Reader.ReadAt(p, off)
+	reader.calls.Add(1)
+	reader.total.Add(int64(n))
+	return n, err
 }
 
 func performanceScan() []byte {

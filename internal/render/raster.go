@@ -18,6 +18,7 @@ const (
 type Key struct {
 	Document uint64
 	Page     int
+	Rotation int
 	Size     image.Point
 	Tile     image.Rectangle
 }

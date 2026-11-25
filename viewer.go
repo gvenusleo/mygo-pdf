@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf/internal/pdfium"
 	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
@@ -25,6 +26,7 @@ type Viewer struct {
 	options            Options
 	fit                Fit
 	loadErr            error
+	interactionErr     error
 	stopCancellation   func() bool
 	nextSubscriber     uint64
 	subscribers        map[uint64]func(State)
@@ -35,6 +37,16 @@ type Viewer struct {
 	loadID             uint64
 	cancelLoad         context.CancelFunc
 	pendingRefresh     func(bool)
+	pendingNavigation  *pendingNavigation
+	rotation           int
+	outlineID          uint64
+	cancelOutline      context.CancelFunc
+	findState          FindState
+	cancelFind         context.CancelFunc
+	findQuery          string
+	findID             uint64
+	focusedLink        semanticLinkKey
+	findMatch          *pdfium.Match
 	document           uint64
 	docContext         context.Context
 	cancelDoc          context.CancelFunc
@@ -96,7 +108,7 @@ func (v *Viewer) setScale(scale float64) bool {
 }
 
 func (v *Viewer) loadViewport() loadViewport {
-	return loadViewport{anchor: v.anchor(), width: v.width, height: v.height, zoom: v.zoom, gap: v.gap, fit: v.fit}
+	return loadViewport{anchor: v.anchor(), width: v.width, height: v.height, zoom: v.zoom, gap: v.gap, fit: v.fit, rotation: v.rotation}
 }
 
 func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, err error) bool {
@@ -115,6 +127,8 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 	}
 	v.docContext, v.cancelDoc = context.WithCancel(context.Background())
 	v.document, v.pages = doc.ID, doc.Pages
+	v.pendingNavigation = nil
+	v.worker.startDimensions(plan, v.docContext)
 	v.hasSelection, v.pointer = false, pointerDrag{}
 	v.layout, v.scroll.Y = plan.layout, plan.y
 	v.navigation = pageNavigation{}
@@ -127,6 +141,7 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 	v.lastScrollY = v.scroll.Y
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
 	v.setRasterDemand(nil, -1, 0, nil)
+	v.interactionErr = nil
 	v.resetMetadata()
 	v.clearTiles()
 	// Install only images from the new document so its text and links match the display.
@@ -156,6 +171,8 @@ func (v *Viewer) Clear() {
 }
 
 func (v *Viewer) clearDocument() {
+	v.cancelOutlineRequest()
+	v.clearFind()
 	if v.cancelDoc != nil {
 		v.cancelDoc()
 		v.docContext, v.cancelDoc = nil, nil
@@ -163,7 +180,9 @@ func (v *Viewer) clearDocument() {
 	v.document, v.pages, v.wanted = 0, nil, nil
 	v.prefetch = rasterKey{}
 	v.missingBitmaps = 0
+	v.interactionErr = nil
 	v.resetMetadata()
+	v.pendingNavigation, v.rotation = nil, 0
 	v.layout, v.zoom = pageLayout{}, 1
 	v.navigation = pageNavigation{}
 	v.scroll.X, v.scroll.Y = 0, 0
@@ -213,7 +232,7 @@ func (v *Viewer) clearTiles() {
 }
 
 func (v *Viewer) finishPage(key rasterKey, frame *pageFrame, err error) bool {
-	if v.document != key.Document || !slices.Contains(v.wanted, key) {
+	if v.document != key.Document || key.Rotation != v.rotation || !slices.Contains(v.wanted, key) {
 		return false
 	}
 	if !key.Tile.Empty() {

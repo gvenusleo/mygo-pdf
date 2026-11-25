@@ -4,9 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io"
 	"log"
-	"os"
+	"strconv"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -17,14 +16,26 @@ import (
 var sample []byte
 
 type demo struct {
-	window  *mygo.Window
-	viewer  *pdf.Viewer
-	ctx     context.Context
-	cancel  context.CancelFunc
-	readID  uint64
-	status  pdf.State
-	readErr error
-	preview bool
+	window               *mygo.Window
+	viewer               *pdf.Viewer
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	readID               uint64
+	status               pdf.State
+	readErr              error
+	preview              bool
+	path                 string
+	password             string
+	openCancel           context.CancelFunc
+	pageEntry, findQuery string
+	pageField            ui.Handle
+	showOutline          bool
+	outlineID            uint64
+	outline              pdf.OutlineResult
+	outlineLoading       bool
+	expanded             map[string]bool
+	outlineList          ui.ListState
+	outlineRowsCache     []outlineRow
 }
 
 func main() {
@@ -45,7 +56,7 @@ func (d *demo) start() {
 	d.window = mygo.NewWindow(mygo.WindowOptions{Title: "MyGo PDF", Width: 960, Height: 760, Content: ui.View(d.view)})
 	d.viewer = pdf.NewViewer(d.window, pdf.Options{OnLink: func(url string) { _ = mygo.Shell.OpenExternal(url) }})
 	d.window.OnClosed(d.cancel)
-	d.viewer.OnChange(func(s pdf.State) { d.status = s })
+	d.viewer.OnChange(d.changed)
 	d.viewer.LoadBytes(d.ctx, sample, pdf.OpenDocument)
 }
 
@@ -60,33 +71,7 @@ func (d *demo) open() {
 	if len(paths) == 0 {
 		return
 	}
-	d.readID++
-	id, ctx, window := d.readID, d.ctx, d.window
-	go func(path string) {
-		data, err := readPDF(path)
-		window.Update(func() {
-			if ctx.Err() != nil || d.readID != id {
-				return
-			}
-			d.readErr = err
-			if err == nil {
-				d.viewer.LoadBytes(ctx, data, pdf.OpenDocument)
-			}
-		})
-	}(paths[0])
-}
-
-func readPDF(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, pdf.MaxPDFBytes+1))
-	if len(data) > pdf.MaxPDFBytes {
-		return nil, pdf.ErrLimit
-	}
-	return data, err
+	d.openPath(paths[0], "")
 }
 
 func (d *demo) view(c *ui.Context) {
@@ -98,13 +83,17 @@ func (d *demo) view(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		if !d.preview {
 			d.toolbar(c)
+			d.readingTools(c)
 		}
-		if d.readErr != nil {
-			ui.Text(c, d.readErr.Error()).TextColor(c.Theme().Danger).Wrap()
-		} else if d.status.Err != nil {
-			ui.Text(c, d.status.Err.Error()).TextColor(c.Theme().Danger).Wrap()
-		}
-		d.viewer.View(c.Key("pdf"), d.preview)
+		d.loadStatus(c)
+		ui.Row(c.Key("split")).Grow(1).FillWidth().MinHeight(0).Children(func() {
+			if !d.preview && d.showOutline {
+				d.outlineView(c.Key("outline"))
+			}
+			ui.Column(c.Key("viewer column")).Grow(1).FillHeight().MinWidth(0).MinHeight(0).Children(func() {
+				d.viewer.View(c.Key("pdf"), [2]bool{d.preview, d.showOutline})
+			})
+		})
 	})
 }
 
@@ -114,12 +103,23 @@ func (d *demo) toolbar(c *ui.Context) {
 	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(2)).Padding(t.Space(2)).Children(func() {
 		ui.Button(c, "Open PDF").OnClick(d.open)
 		ui.Button(c, "Previous").Disabled(s.Page <= 1).OnClick(func() { d.viewer.GoToPage(s.Page - 1) })
-		ui.Text(c, fmt.Sprintf("%d / %d", s.Page, s.PageCount))
+		if !d.pageField.Focused(c) {
+			d.pageEntry = pageLabel(s.Page)
+		}
+		entry := ui.TextInput(c.Key("page"), &d.pageEntry).Label("Page number").Width(72).Bind(&d.pageField).Disabled(s.Page == 0)
+		entry.OnSubmit(func() {
+			page, err := strconv.Atoi(d.pageEntry)
+			if err != nil || !d.viewer.GoToPage(page) {
+				d.pageEntry = pageLabel(s.Page)
+			}
+		})
+		ui.Text(c, fmt.Sprintf("/ %d", s.PageCount))
 		ui.Button(c, "Next").Disabled(s.Page >= s.PageCount).OnClick(func() { d.viewer.GoToPage(s.Page + 1) })
 		ui.Button(c, "−").Label("Zoom out").Disabled(s.Page == 0 || s.Zoom <= 0.5).OnClick(func() { d.viewer.SetZoom(s.Zoom / 1.25) })
 		ui.Button(c, "+").Label("Zoom in").Disabled(s.Page == 0 || s.Zoom >= 4).OnClick(func() { d.viewer.SetZoom(s.Zoom * 1.25) })
 		ui.Button(c, "Fit width").OnClick(func() { d.viewer.SetFit(pdf.FitWidth) })
 		ui.Button(c, "Fit page").OnClick(func() { d.viewer.SetFit(pdf.FitPage) })
+		ui.Button(c, "Rotate 90°").Disabled(s.Page == 0).OnClick(func() { d.viewer.SetRotation(s.Rotation + 1) })
 		ui.Button(c, "Hide toolbar").OnClick(func() { d.preview = true })
 	})
 }

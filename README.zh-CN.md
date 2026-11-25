@@ -13,7 +13,7 @@ mise trust
 mise run dev
 ```
 
-示例自带一份 PDF。可以用工具栏打开本地文件、切换页码或适配模式，按 `Cmd` 或 `Ctrl` 加 `P` 切换工具栏。查看器可独立嵌入，也可搭配宿主自己的控件。需要重新生成样例 PDF 时，运行 `typst compile testdata/sample.typ examples/viewer/sample.pdf`。
+示例自带一份 PDF。工具栏可打开本地文件、按页码或目录跳转、双向搜索、缩放、切换适配模式和旋转。按 `Cmd` 或 `Ctrl` 加 `P` 切换工具栏。查看器可独立嵌入，也可搭配宿主自己的控件。需要重新生成样例 PDF 时，运行 `typst compile testdata/sample.typ examples/viewer/sample.pdf`。
 
 ## 接入 MyGo 应用
 
@@ -21,7 +21,11 @@ mise run dev
 
 用 `LoadBytes(ctx, data, pdf.OpenDocument)` 打开新文档。更新同一份文档且需要保留阅读位置时，使用 `pdf.RefreshDocument`。如果宿主暂时隐藏已经显示过的查看器，刷新会等到视图重新出现或请求被取消。传入的字节由查看器持有，调用方随后不得修改。读取文件应在后台进行，回到主线程确认结果仍对应当前请求后再调用 `LoadBytes`。
 
-通过 `State` 和 `OnChange` 获取加载状态、可见区渲染状态、错误、页码和缩放倍率。宿主可用 `GoToPage`、`SetZoom` 和 `SetFit` 组装自己的工具栏。`Options.OnLink` 处理经校验的外部链接。`Options.OpenExternal` 添加系统打开入口，宿主可用 `Options.CanOpenExternal` 控制哪些文档显示此入口。`ChineseLabels()` 提供简体中文菜单。关闭窗口时查看器会自动停止。需要提前移除时，在主线程调用 `Close`，在 UI 线程之外等待 `Done`。
+对于内容稳定的本地文件，在后台打开文件并取得文件大小，再在 UI 线程调用 `LoadReaderAt(ctx, file, size, pdf.LoadOptions{})`。在后台等待返回的释放通道关闭后，再关闭文件。加载完成后，文件仍须保持可读且内容稳定。对于原地重写的文件，提供不可变字节或稳定的文件快照。两个入口均限制单份文档最多 256 MiB 和 100,000 页。
+
+如果 `State.Err` 报告 `ErrPassword`，宿主可以提示用户输入密码，再用 `LoadOptions.Password` 重试。字节输入用 `LoadBytesWithOptions`，文件输入则每次重新打开读取源。每次重试都是新的加载请求，密码由宿主管理。
+
+通过 `State` 和 `OnChange` 获取加载状态、可见区渲染状态、错误、页码、缩放倍率、旋转角度和搜索状态。宿主可用 `GoToPage`、`SetZoom`、`SetFit` 和 `SetRotation` 组装工具栏，用 `ReadOutline` 和 `GoToOutline` 浏览文档内书签，用 `Find` 和 `ClearFind` 进行可取消的查找。可见页通过 MyGo 无障碍接口公开页码、权限允许的文本和键盘链接。`Options.OnLink` 处理经校验的外部链接。`Options.OpenExternal` 添加系统打开入口，宿主可用 `Options.CanOpenExternal` 控制哪些文档显示此入口。`ChineseLabels()` 提供简体中文菜单。关闭窗口时查看器会自动停止。需要提前移除时，在主线程调用 `Close`，在 UI 线程之外等待 `Done`。
 
 ### 准备 PDFium 资源
 

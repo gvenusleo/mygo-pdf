@@ -24,6 +24,9 @@ func (v *Viewer) viewportInput(services ui.Services) func(ui.InputEvent) bool {
 		case ui.InputZoom:
 			return v.pinch(ev, ev.X, ev.Y)
 		case ui.InputScroll:
+			if v.pendingNavigation != nil && (ev.DX != 0 || ev.DY != 0) {
+				v.pendingNavigation = nil
+			}
 			if ev.Mods&(ui.Cmd|ui.Ctrl) != 0 && ev.DY != 0 {
 				v.setZoom(v.zoom*float32(math.Exp(-float64(ev.DY)/160)), ev.X, ev.Y)
 				return true
@@ -81,8 +84,9 @@ func (v *Viewer) pageInput(document uint64, page int, data *geometry, bounds ui.
 				return false
 			}
 			v.hasSelection = false
-			index := characterAt(data, ev.X/bounds.W, ev.Y/bounds.H, false)
-			v.pointer = pointerDrag{down: true, x: ev.X, y: ev.Y, start: textPoint{Page: page, Index: index}, link: linkAt(data, ev.X/bounds.W, ev.Y/bounds.H)}
+			point := rotatedPoint(pdfium.Point{X: ev.X / bounds.W, Y: ev.Y / bounds.H}, -v.rotation)
+			index := characterAt(data, point.X, point.Y, false)
+			v.pointer = pointerDrag{down: true, x: ev.X, y: ev.Y, start: textPoint{Page: page, Index: index}, link: linkAt(data, point.X, point.Y)}
 			return true
 		case ui.InputPointerMove:
 			if v.pointer.down && ev.Button == 0 {
@@ -95,7 +99,8 @@ func (v *Viewer) pageInput(document uint64, page int, data *geometry, bounds ui.
 			}
 			if !ev.Canceled {
 				v.extendSelection(ev, bounds)
-				if link := v.pointer.link; !v.pointer.moved && link >= 0 && link == linkAt(data, ev.X/bounds.W, ev.Y/bounds.H) {
+				point := rotatedPoint(pdfium.Point{X: ev.X / bounds.W, Y: ev.Y / bounds.H}, -v.rotation)
+				if link := v.pointer.link; !v.pointer.moved && link >= 0 && link == linkAt(data, point.X, point.Y) {
 					v.openLink(data.Links[link])
 				}
 			}
@@ -122,7 +127,8 @@ func (v *Viewer) extendSelection(ev ui.InputEvent, bounds ui.Rect) {
 		return
 	}
 	r := v.layout.page(page)
-	if index := characterAt(data, (x-r.X)/r.W, (y-r.Y)/r.H, true); index >= 0 {
+	point := rotatedPoint(pdfium.Point{X: (x - r.X) / r.W, Y: (y - r.Y) / r.H}, -v.rotation)
+	if index := characterAt(data, point.X, point.Y, true); index >= 0 {
 		first, last := drag.start, textPoint{Page: page, Index: index}
 		if first.Page > last.Page || first.Page == last.Page && first.Index > last.Index {
 			first, last = last, first
@@ -137,11 +143,16 @@ func (v *Viewer) openLink(link pageLink) {
 		return
 	}
 	if link.Page >= 0 && link.Page < len(v.pages) {
-		v.goToDestination(link.Page, link.Target)
+		v.navigateToWhenSized(link.Page, func() { v.goToDestination(link.Page, link.Target) })
 	}
 }
 
 func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
+	if dest.Mode == 0 {
+		v.GoToPage(index + 1)
+		return
+	}
+	dest = rotatedDestination(dest, v.rotation)
 	position := dest.Position
 	if dest.Mode == pdfium.DestinationXYZ && (!dest.HasX || !dest.HasY) {
 		current := v.layout.page(v.currentPage())
@@ -155,7 +166,7 @@ func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
 	vp := v.loadViewport()
 	vp.zoom = 1
 	baseScale := v.layout.geometry.fit(vp).scale
-	size := v.pages[index]
+	size := v.layout.size(index)
 	area := dest.Area
 	width := float64(size.Width) * float64(area.W)
 	height := float64(size.Height) * float64(area.H)

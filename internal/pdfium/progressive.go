@@ -106,7 +106,7 @@ var pauseCallback = sync.OnceValue(func() uintptr {
 var activeRenderContext context.Context
 var renderDeadline time.Time
 
-func (e *Engine) drawProgressive(ctx context.Context, bitmap, page uintptr, x, y, width, height, flags int32, background bool) error {
+func (e *Engine) drawProgressive(ctx context.Context, bitmap, page uintptr, x, y, width, height, rotation, flags int32, background bool) error {
 	const (
 		continued = 1
 		done      = 2
@@ -129,7 +129,7 @@ func (e *Engine) drawProgressive(ctx context.Context, bitmap, page uintptr, x, y
 		activeRenderContext, renderDeadline = ctx, time.Now().Add(slice)
 		var status int32
 		if start {
-			status = e.renderStart(bitmap, page, x, y, width, height, 0, flags, &pause)
+			status = e.renderStart(bitmap, page, x, y, width, height, rotation, flags, &pause)
 		} else {
 			status = e.renderContinue(page, &pause)
 		}

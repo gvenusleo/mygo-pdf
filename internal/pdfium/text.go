@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
@@ -32,9 +33,10 @@ type Link struct {
 	Page   int
 	Target Destination
 	URL    string
+	Label  string
 }
 
-func (link Link) Bytes() int { return 80 + len(link.URL) }
+func (link Link) Bytes() int { return 96 + len(link.URL) + len(link.Label) }
 
 // SelectionBox holds the font bounds and inline axis used for highlighting.
 type SelectionBox struct {
@@ -46,11 +48,14 @@ type Geometry struct {
 	Chars     []Rect
 	Selection []SelectionBox
 	Links     []Link
+	Text      string
 }
 
 const selectionBoxBytes = 20
 
-func (g *Geometry) textBytes() int { return 16*cap(g.Chars) + selectionBoxBytes*cap(g.Selection) }
+func (g *Geometry) textBytes() int {
+	return 16*cap(g.Chars) + selectionBoxBytes*cap(g.Selection) + len(g.Text)
+}
 
 func (g *Geometry) Bytes() int {
 	bytes := g.textBytes()
@@ -60,12 +65,18 @@ func (g *Geometry) Bytes() int {
 	return bytes
 }
 
-func (e *Engine) ReadGeometry(ctx context.Context, doc *Document, index int) (*Geometry, error) {
+func (e *Engine) ReadGeometry(ctx context.Context, doc *Document, index int) (geometry *Geometry, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	doc.startRead(ctx)
+	defer func() {
+		if readErr := doc.finishRead(); readErr != nil {
+			geometry, err = nil, readErr
+		}
+	}()
 	page := e.loadPage(doc.handle, int32(index))
 	if page == 0 {
 		return nil, fmt.Errorf("cannot read PDF page %d", index+1)
@@ -80,6 +91,11 @@ func (e *Engine) ReadGeometry(ctx context.Context, doc *Document, index int) (*G
 			f.Chars = e.characterBoxes(ctx, page, text)
 		}
 		f.Links = e.webLinks(ctx, page, text, f.Links)
+		if doc.accessible {
+			const semanticBytes = 8 << 10
+			f.Text = e.readText(text, 0, min(semanticBytes, int(e.charCount(text))), semanticBytes)
+			e.labelLinks(ctx, text, f)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -185,22 +201,25 @@ func (e *Engine) annotations(ctx context.Context, doc *Document, page uintptr) [
 	return links
 }
 
+const (
+	actionGoTo = 1
+	actionURI  = 3
+)
+
 func (e *Engine) annotationTarget(ctx context.Context, doc *Document, annot uintptr) Link {
-	const gotoPage = 1
-	const uri = 3
 	link := Link{Page: -1}
-	dest := e.linkDest(doc.handle, annot)
-	if dest == 0 {
-		if action := e.linkAction(annot); action != 0 {
-			switch e.actionType(action) {
-			case gotoPage:
-				dest = e.actionDest(doc.handle, action)
-			case uri:
-				if n := e.actionURI(doc.handle, action, nil, 0); n > 1 && n <= maxURL {
-					buf := make([]byte, n)
-					e.actionURI(doc.handle, action, &buf[0], n)
-					link.URL = allowedURL(trimCString(buf))
-				}
+	var dest uintptr
+	if action := e.linkAction(annot); action == 0 {
+		dest = e.linkDest(doc.handle, annot)
+	} else {
+		switch e.actionType(action) {
+		case actionGoTo:
+			dest = e.actionDest(doc.handle, action)
+		case actionURI:
+			if n := e.actionURI(doc.handle, action, nil, 0); n > 1 && n <= maxURL {
+				buf := make([]byte, n)
+				e.actionURI(doc.handle, action, &buf[0], n)
+				link.URL = allowedURL(trimCString(buf))
 			}
 		}
 	}
@@ -277,16 +296,22 @@ func utf16Text(units []uint16) string {
 type TextPoint struct{ Page, Index int }
 type TextRange struct{ First, Last TextPoint }
 
-func (e *Engine) CopyText(ctx context.Context, doc *Document, selection TextRange) string {
+func (e *Engine) CopyText(ctx context.Context, doc *Document, selection TextRange) (content string, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !doc.copy {
-		return ""
+		return "", nil
 	}
+	doc.startRead(ctx)
+	defer func() {
+		if readErr := doc.finishRead(); readErr != nil {
+			content, err = "", readErr
+		}
+	}()
 	var result strings.Builder
 	for i := selection.First.Page; i <= selection.Last.Page && i < len(doc.Pages) && result.Len() < 1<<20; i++ {
 		if ctx.Err() != nil {
-			return ""
+			return "", ctx.Err()
 		}
 		page := e.loadPage(doc.handle, int32(i))
 		if page == 0 {
@@ -301,7 +326,7 @@ func (e *Engine) CopyText(ctx context.Context, doc *Document, selection TextRang
 			result.WriteString(text)
 		}
 	}
-	return result.String()
+	return result.String(), ctx.Err()
 }
 
 func (e *Engine) pageSelection(page uintptr, index int, selection TextRange) string {
@@ -317,10 +342,50 @@ func (e *Engine) pageSelection(page uintptr, index int, selection TextRange) str
 	if index == selection.Last.Page {
 		end = min(end, selection.Last.Index+1)
 	}
-	if end <= start {
+	return e.readText(text, start, end-start, 0)
+}
+
+func (e *Engine) readText(text uintptr, start, count, maxBytes int) string {
+	if count <= 0 {
 		return ""
 	}
-	buf := make([]uint16, end-start+1)
-	n := e.getText(text, int32(start), int32(end-start), &buf[0])
-	return utf16Text(buf[:max(0, min(int(n), len(buf)))])
+	buf := make([]uint16, count+1)
+	n := e.getText(text, int32(start), int32(count), &buf[0])
+	value := utf16Text(buf[:max(0, min(int(n), len(buf)))])
+	if maxBytes > 0 && len(value) > maxBytes {
+		for !utf8.RuneStart(value[maxBytes]) {
+			maxBytes--
+		}
+		value = strings.Clone(value[:maxBytes])
+	}
+	return value
+}
+
+func (e *Engine) labelLinks(ctx context.Context, text uintptr, data *Geometry) {
+	// The extraction budget also bounds the work on densely annotated pages.
+	const maxChecks = 128_000
+	checks, remaining := 0, 8<<10
+	for i := range data.Links {
+		if remaining == 0 || checks >= maxChecks || ctx.Err() != nil {
+			break
+		}
+		link := &data.Links[i]
+		first, count := -1, 0
+		for index, box := range data.Chars {
+			checks++
+			if box.W > 0 && box.H > 0 && link.Bounds.Contains(box.X+box.W/2, box.Y+box.H/2) {
+				if first < 0 {
+					first = index
+				}
+				count = index - first + 1
+			}
+			if count >= 128 || checks >= maxChecks {
+				break
+			}
+		}
+		if first >= 0 {
+			link.Label = strings.TrimSpace(e.readText(text, first, count, min(remaining, 384)))
+			remaining -= len(link.Label)
+		}
+	}
 }

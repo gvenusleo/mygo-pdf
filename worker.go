@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"context"
+	"io"
 	"slices"
 	"sync"
 )
@@ -10,13 +11,24 @@ type loadJob struct {
 	ctx      context.Context
 	id       uint64
 	data     []byte
+	reader   io.ReaderAt
+	size     int64
+	password string
+	release  func()
 	viewport loadViewport
+}
+
+func (job *loadJob) releaseSource() {
+	if job != nil && job.release != nil {
+		job.release()
+	}
 }
 
 type loadViewport struct {
 	anchor                   readingPosition
 	width, height, zoom, gap float32
 	fit                      Fit
+	rotation                 int
 }
 
 type loadPlan struct {
@@ -26,8 +38,12 @@ type loadPlan struct {
 	keys     []rasterKey
 }
 
+func (l pageLayout) viewportOffset(vp loadViewport) float32 {
+	return max(0, min(l.offset(vp.anchor), l.height-vp.height))
+}
+
 func (vp loadViewport) plan(id uint64, layout pageLayout) loadPlan {
-	y := max(0, min(layout.offset(vp.anchor), layout.height-vp.height))
+	y := layout.viewportOffset(vp)
 	first, last := layout.visiblePages(y, vp.height)
 	keys := make([]rasterKey, last-first+1)
 	budget := visibleBudget / len(keys)
@@ -61,6 +77,9 @@ type worker struct {
 	background     bool
 	cancelPage     context.CancelFunc
 	getEngine      func() (*engine, error)
+	dimensions     *dimensionQueue
+	outline        *outlineJob
+	find           *findJob
 }
 
 func (w *worker) signal() {
@@ -72,9 +91,21 @@ func (w *worker) signal() {
 
 func (w *worker) submitLoad(job *loadJob) {
 	w.mu.Lock()
+	previous := w.load
 	w.load = job
+	w.outline, w.find = nil, nil
 	w.mu.Unlock()
+	previous.releaseSource()
 	w.signal()
+}
+
+func (w *worker) cancelQueuedLoad(id uint64) {
+	w.mu.Lock()
+	if w.load != nil && w.load.id == id {
+		w.load.releaseSource()
+		w.load = nil
+	}
+	w.mu.Unlock()
 }
 
 func (w *worker) submitPages(pages []rasterKey, prefetch rasterKey, missing int, metadata []geometryKey) {
@@ -106,12 +137,16 @@ func (w *worker) submitCopy(job copyJob) {
 func (w *worker) reset() {
 	w.mu.Lock()
 	w.clear = true
+	previous := w.load
 	w.load, w.copy, w.pages, w.metadata = nil, nil, nil, nil
+	w.dimensions = nil
+	w.outline, w.find = nil, nil
 	w.missingBitmaps = 0
 	if w.cancelPage != nil {
 		w.cancelPage()
 	}
 	w.mu.Unlock()
+	previous.releaseSource()
 	w.signal()
 }
 
@@ -119,30 +154,58 @@ func (w *worker) shouldReadMetadata() bool {
 	return w.missingBitmaps == 0 && len(w.metadata) > 0
 }
 
-func (w *worker) next() (load *loadJob, copy *copyJob, clear bool, page rasterKey, metadata geometryKey, ctx context.Context, background bool) {
+type workerTask struct {
+	load       *loadJob
+	copy       *copyJob
+	clear      bool
+	page       rasterKey
+	metadata   geometryKey
+	size       geometryKey
+	outline    *outlineJob
+	find       *findJob
+	ctx        context.Context
+	background bool
+}
+
+func (w *worker) next() (task workerTask) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	switch {
 	case w.clear:
 		w.clear = false
-		clear = true
+		task.clear = true
 	case w.load != nil:
-		load, w.load = w.load, nil
+		task.load, w.load = w.load, nil
 	case w.copy != nil:
-		copy, w.copy = w.copy, nil
+		task.copy, w.copy = w.copy, nil
+	case w.dimensions.hasWanted():
+		task.size, task.ctx = w.dimensions.nextWanted()
 	case w.shouldReadMetadata():
-		metadata, w.metadata = w.metadata[0], w.metadata[1:]
-		w.inMetadata = metadata
-		ctx, w.cancelPage = context.WithCancel(context.Background())
+		task.metadata, w.metadata = w.metadata[0], w.metadata[1:]
+		w.inMetadata = task.metadata
+		task.ctx, w.cancelPage = context.WithCancel(context.Background())
+	case len(w.pages) > 0 && w.pages[0] != w.prefetch:
+		w.nextRaster(&task)
+	case w.outline != nil:
+		task.outline = w.outline
+	case w.find != nil:
+		task.find = w.find
 	case len(w.pages) > 0:
-		page, w.pages = w.pages[0], w.pages[1:]
-		w.missingBitmaps = max(0, w.missingBitmaps-1)
-		w.inFlight = page
-		background = page == w.prefetch
-		w.background = background
-		ctx, w.cancelPage = context.WithCancel(context.Background())
+		w.nextRaster(&task)
+	case w.dimensions.hasPrefetch() || w.dimensions.hasBackground():
+		task.size, task.ctx = w.dimensions.nextBackground()
+		task.background = true
 	}
-	return
+	return task
+}
+
+func (w *worker) nextRaster(task *workerTask) {
+	task.page, w.pages = w.pages[0], w.pages[1:]
+	w.missingBitmaps = max(0, w.missingBitmaps-1)
+	w.inFlight = task.page
+	w.background = task.page == w.prefetch
+	task.background = w.background
+	task.ctx, w.cancelPage = context.WithCancel(context.Background())
 }
 
 func (w *worker) finishPage(key rasterKey, delivered bool) {
@@ -172,19 +235,25 @@ func (v *Viewer) run() {
 			return
 		default:
 		}
-		load, copy, clear, page, metadata, ctx, background := w.next()
+		task := w.next()
 		switch {
-		case clear:
+		case task.clear:
 			e.Close(doc)
 			doc = nil
-		case load != nil:
-			e, doc = v.replaceDocument(e, doc, load)
-		case copy != nil:
-			v.readSelection(e, doc, copy)
-		case metadata.document != 0:
-			v.readMetadata(e, doc, metadata, ctx)
-		case ctx != nil:
-			v.renderPage(e, doc, page, ctx, background)
+		case task.load != nil:
+			e, doc = v.replaceDocument(e, doc, task.load)
+		case task.copy != nil:
+			v.readSelection(e, doc, task.copy)
+		case task.size.document != 0:
+			v.readDimension(e, doc, task)
+		case task.metadata.document != 0:
+			v.readMetadata(e, doc, task.metadata, task.ctx)
+		case task.outline != nil:
+			v.readOutlineStep(e, doc, task.outline)
+		case task.find != nil:
+			v.findStep(e, doc, task.find)
+		case task.ctx != nil:
+			v.renderPage(e, doc, task.page, task.ctx, task.background)
 		default:
 			select {
 			case <-w.stop:
@@ -197,20 +266,34 @@ func (v *Viewer) run() {
 
 func (v *Viewer) replaceDocument(e *engine, old *document, job *loadJob) (*engine, *document) {
 	if job.ctx.Err() != nil {
+		job.releaseSource()
 		return e, old
 	}
 	doc, e, err := v.worker.openDocument(e, job)
 	var plan loadPlan
 	var frames []*pageFrame
 	if err == nil {
-		plan = job.viewport.plan(doc.ID, newFittedLayout(doc.Pages, job.viewport))
-		frames, err = renderLoad(e, job.ctx, doc, plan.keys, nil)
+		plan, err = prepareLayout(e, job.ctx, doc, job.viewport, pageGeometry{})
+		if err == nil {
+			frames, err = renderLoad(e, job.ctx, doc, plan.keys, nil)
+		}
+	}
+	if err != nil {
+		e.Close(doc)
+		doc = nil
+		job.releaseSource()
 	}
 	for {
 		reply := v.publishLoad(job, doc, plan, frames, err)
 		if reply.next != nil {
-			plan = *reply.next
-			frames, err = renderLoad(e, job.ctx, doc, plan.keys, frames)
+			plan, err = prepareLayout(e, job.ctx, doc, *reply.next, plan.layout.geometry)
+			if err == nil {
+				frames, err = renderLoad(e, job.ctx, doc, plan.keys, frames)
+			}
+			if err != nil {
+				e.Close(doc)
+				doc, frames = nil, nil
+			}
 			continue
 		}
 		if reply.installed {
@@ -224,7 +307,7 @@ func (v *Viewer) replaceDocument(e *engine, old *document, job *loadJob) (*engin
 
 type loadReply struct {
 	installed bool
-	next      *loadPlan
+	next      *loadViewport
 }
 
 func (v *Viewer) publishLoad(job *loadJob, doc *document, plan loadPlan, frames []*pageFrame, err error) loadReply {
@@ -274,7 +357,7 @@ func (v *Viewer) applyLoad(job *loadJob, doc *document, plan loadPlan, frames []
 	if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
 		next := viewport.plan(doc.ID, plan.layout.geometry.fit(viewport))
 		if !slices.Equal(next.keys, plan.keys) {
-			return loadReply{next: &next}
+			return loadReply{next: &viewport}
 		}
 		plan = next
 	}
@@ -289,7 +372,13 @@ func (w *worker) openDocument(e *engine, job *loadJob) (*document, *engine, erro
 			return nil, nil, err
 		}
 	}
-	doc, err := e.Open(job.ctx, job.id, job.data)
+	password := job.password
+	job.password = ""
+	if job.release != nil {
+		doc, err := e.OpenReader(job.ctx, job.id, job.reader, job.size, password, job.release)
+		return doc, e, err
+	}
+	doc, err := e.OpenBytes(job.ctx, job.id, job.data, password)
 	return doc, e, err
 }
 
@@ -323,7 +412,7 @@ func (v *Viewer) renderPage(e *engine, doc *document, key rasterKey, ctx context
 	if doc != nil && doc.ID == key.Document && ctx.Err() == nil {
 		frame, err := renderFrame(e, ctx, doc, key, background)
 		if ctx.Err() == nil {
-			delivered = v.deliver(func() bool { return ctx.Err() == nil && v.finishPage(key, frame, err) })
+			delivered = v.deliver(ctx, func() bool { return v.finishPage(key, frame, err) })
 		}
 	}
 	v.worker.finishPage(key, delivered)
@@ -332,9 +421,9 @@ func (v *Viewer) renderPage(e *engine, doc *document, key rasterKey, ctx context
 func (v *Viewer) readMetadata(e *engine, doc *document, key geometryKey, ctx context.Context) {
 	delivered := false
 	if doc != nil && doc.ID == key.document && ctx.Err() == nil {
-		data, _ := e.ReadGeometry(ctx, doc, key.page)
+		data, err := e.ReadGeometry(ctx, doc, key.page)
 		if ctx.Err() == nil {
-			delivered = v.deliver(func() bool { return ctx.Err() == nil && v.finishMetadata(key, data) })
+			delivered = v.deliver(ctx, func() bool { return v.finishMetadata(key, data, err) })
 		}
 	}
 	w := v.worker
@@ -351,13 +440,17 @@ func (v *Viewer) readSelection(e *engine, doc *document, job *copyJob) {
 	if doc == nil || doc.ID != job.document {
 		return
 	}
-	text := e.CopyText(job.ctx, doc, job.selected)
-	if text != "" {
-		v.deliver(func() bool {
+	text, err := e.CopyText(job.ctx, doc, job.selected)
+	if job.ctx.Err() == nil && (err != nil || text != "") {
+		v.deliver(job.ctx, func() bool {
 			if v.document != job.document || !v.hasSelection || v.selection != job.selected {
 				return false
 			}
-			job.apply(text)
+			v.interactionErr = err
+			if err == nil {
+				job.apply(text)
+			}
+			v.notify()
 			return true
 		})
 	}
@@ -372,14 +465,16 @@ func renderFrame(e *engine, ctx context.Context, doc *document, key rasterKey, b
 }
 
 // Wait for the UI thread to consume each result so bitmaps cannot pile up in its queue.
-func (v *Viewer) deliver(apply func() bool) bool {
+func (v *Viewer) deliver(ctx context.Context, apply func() bool) bool {
 	accepted := make(chan bool, 1)
 	v.publish(func() {
-		accepted <- (!v.closed && apply())
+		accepted <- (!v.closed && ctx.Err() == nil && apply())
 	})
 	select {
 	case ok := <-accepted:
 		return ok
+	case <-ctx.Done():
+		return false
 	case <-v.worker.stop:
 		return false
 	}

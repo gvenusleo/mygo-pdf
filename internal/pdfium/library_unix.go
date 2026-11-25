@@ -2,11 +2,19 @@
 
 package pdfium
 
-import "github.com/ebitengine/purego"
+import (
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+)
 
 type cLong = uint64
 
 func newPauseCallback(fn func(uintptr) uintptr) uintptr { return purego.NewCallback(fn) }
+
+func newFileCallback(fn func(uintptr, cLong, unsafe.Pointer, cLong) uintptr) uintptr {
+	return purego.NewCallback(fn)
+}
 
 func openLibrary(path string) (library, error) {
 	handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_LOCAL)

@@ -221,7 +221,7 @@ func TestGeometryOutlivesRasterAndRejectsOldDocument(t *testing.T) {
 	}
 	next := v.LoadBytes(t.Context(), samplePDF(3), RefreshDocument)
 	await(t, updates, view, func() bool { return v.document == next })
-	if v.finishMetadata(geometryKey{old, 0}, data) || v.metadata[0].data == data {
+	if v.finishMetadata(geometryKey{old, 0}, data, nil) || v.metadata[0].data == data {
 		t.Fatal("old page geometry was applied after refresh")
 	}
 }

@@ -15,6 +15,7 @@ import (
 type Engine struct {
 	initLibrary     func()
 	loadDocument    func(*byte, uintptr, *byte) uintptr
+	loadCustom      func(*fileAccess, *byte) uintptr
 	lastError       func() cLong
 	closeDocument   func(uintptr)
 	pageCount       func(uintptr) int32
@@ -59,6 +60,19 @@ type Engine struct {
 	webLinkURL      func(uintptr, int32, *uint16, int32) int32
 	webRectCount    func(uintptr, int32) int32
 	webRect         func(uintptr, int32, int32, *float64, *float64, *float64, *float64) int32
+	bookmarkFirst   func(uintptr, uintptr) uintptr
+	bookmarkNext    func(uintptr, uintptr) uintptr
+	bookmarkTitle   func(uintptr, *uint16, cLong) cLong
+	bookmarkDest    func(uintptr, uintptr) uintptr
+	bookmarkAction  func(uintptr) uintptr
+	findStart       func(uintptr, *uint16, cLong, int32) uintptr
+	findNext        func(uintptr) int32
+	findPrev        func(uintptr) int32
+	findIndex       func(uintptr) int32
+	findCount       func(uintptr) int32
+	findClose       func(uintptr)
+	countTextRects  func(uintptr, int32, int32) int32
+	getTextRect     func(uintptr, int32, *float64, *float64, *float64, *float64) int32
 }
 
 type library struct {
@@ -117,6 +131,20 @@ func loadEngine(path string) (*Engine, error) {
 		}
 	}
 	for _, symbol := range []binding{
+		{"FPDF_LoadCustomDocument", &e.loadCustom},
+		{"FPDFBookmark_GetFirstChild", &e.bookmarkFirst},
+		{"FPDFBookmark_GetNextSibling", &e.bookmarkNext},
+		{"FPDFBookmark_GetTitle", &e.bookmarkTitle},
+		{"FPDFBookmark_GetDest", &e.bookmarkDest},
+		{"FPDFBookmark_GetAction", &e.bookmarkAction},
+		{"FPDFText_FindStart", &e.findStart},
+		{"FPDFText_FindNext", &e.findNext},
+		{"FPDFText_FindPrev", &e.findPrev},
+		{"FPDFText_GetSchResultIndex", &e.findIndex},
+		{"FPDFText_GetSchCount", &e.findCount},
+		{"FPDFText_FindClose", &e.findClose},
+		{"FPDFText_CountRects", &e.countTextRects},
+		{"FPDFText_GetRect", &e.getTextRect},
 		{"FPDF_RenderPageBitmap_Start", &e.renderStart},
 		{"FPDF_RenderPage_Continue", &e.renderContinue},
 		{"FPDF_RenderPage_Close", &e.renderClose},

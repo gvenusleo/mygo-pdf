@@ -12,7 +12,7 @@ import (
 	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
-// MaxPDFBytes is the maximum size of a PDF passed to LoadBytes.
+// MaxPDFBytes is the maximum size of a PDF passed to a viewer load method.
 const MaxPDFBytes = pdfium.MaxPDFBytes
 
 var (

@@ -12,14 +12,16 @@ import (
 
 type pageGeometry struct {
 	sizes           []pageSize
-	heights         []float64
+	heights, widths []float64
 	widest, tallest float32
+	lazy            *sizeIndex
 }
 
 type pageLayout struct {
 	geometry      pageGeometry
 	scale, gap    float64
 	width, height float32
+	rotation      int
 }
 
 type readingPosition struct {
@@ -50,11 +52,12 @@ func newFittedLayout(sizes []pageSize, vp loadViewport) pageLayout {
 	if len(sizes) == 0 {
 		return pageLayout{}
 	}
-	g := pageGeometry{sizes: sizes, heights: make([]float64, len(sizes)+1)}
+	g := pageGeometry{sizes: sizes, heights: make([]float64, len(sizes)+1), widths: make([]float64, len(sizes)+1)}
 	for i, size := range sizes {
 		g.widest = max(g.widest, size.Width)
 		g.tallest = max(g.tallest, size.Height)
 		g.heights[i+1] = g.heights[i] + float64(size.Height)
+		g.widths[i+1] = g.widths[i] + float64(size.Width)
 	}
 	return g.fit(vp)
 }
@@ -64,28 +67,55 @@ func (g pageGeometry) fit(vp loadViewport) pageLayout {
 		return pageLayout{}
 	}
 	width, height, gap := float64(vp.width), float64(vp.height), float64(vp.gap)
-	scale := max(1, width-2*gap) / float64(g.widest)
+	odd := vp.rotation%2 != 0
+	widest, tallest := g.widest, g.tallest
+	if g.lazy != nil {
+		totals := g.lazy.aggregate(1, len(g.sizes))
+		widest, tallest = totals.widest, totals.tallest
+	}
+	if odd {
+		widest, tallest = tallest, widest
+	}
+	scale := max(1, width-2*gap) / float64(widest)
 	if vp.fit == FitPage && height > 0 {
-		scale = min(scale, max(1, height-2*gap)/float64(g.tallest))
+		scale = min(scale, max(1, height-2*gap)/float64(tallest))
 	}
 	scale *= float64(vp.zoom)
-	return pageLayout{geometry: g, scale: scale, gap: gap,
-		width:  float32(max(width, float64(g.widest)*scale+2*gap)),
-		height: float32(g.heights[len(g.sizes)]*scale + float64(len(g.sizes)+1)*gap)}
+	return pageLayout{geometry: g, scale: scale, gap: gap, rotation: vp.rotation,
+		width:  float32(max(width, float64(widest)*scale+2*gap)),
+		height: float32(g.prefix(len(g.sizes), odd)*scale + float64(len(g.sizes)+1)*gap)}
+}
+
+func (g pageGeometry) prefix(end int, odd bool) float64 {
+	if g.lazy != nil {
+		return g.lazy.prefix(end, odd)
+	}
+	if odd {
+		return g.widths[end]
+	}
+	return g.heights[end]
+}
+
+func (l pageLayout) size(index int) pageSize {
+	size := l.geometry.size(index)
+	if l.rotation%2 != 0 {
+		size.Width, size.Height = size.Height, size.Width
+	}
+	return size
 }
 
 func (l pageLayout) page(index int) ui.Rect {
-	size := l.geometry.sizes[index]
+	size := l.size(index)
 	width := float32(float64(size.Width) * l.scale)
 	return ui.Rect{X: (l.width - width) / 2, Y: float32(l.top(index)), W: width, H: float32(float64(size.Height) * l.scale)}
 }
 
 func (l pageLayout) top(index int) float64 {
-	return l.geometry.heights[index]*l.scale + float64(index+1)*l.gap
+	return l.geometry.prefix(index, l.rotation%2 != 0)*l.scale + float64(index+1)*l.gap
 }
 
 func (l pageLayout) bottom(index int) float64 {
-	return l.geometry.heights[index+1]*l.scale + float64(index+1)*l.gap
+	return l.geometry.prefix(index+1, l.rotation%2 != 0)*l.scale + float64(index+1)*l.gap
 }
 
 func (l pageLayout) raster(doc uint64, page int, scale float64) rasterKey {
@@ -102,10 +132,13 @@ func (l pageLayout) fallback(doc uint64, page int, zoom float32, budget int) ras
 
 func (l pageLayout) rasterAt(doc uint64, page int, scale float64, pixelLimit int) rasterKey {
 	r := l.page(page)
-	return rasterKey{Document: doc, Page: page, Size: render.RasterSize(float64(r.W)*scale, float64(r.H)*scale, pixelLimit)}
+	return rasterKey{Document: doc, Page: page, Rotation: l.rotation, Size: render.RasterSize(float64(r.W)*scale, float64(r.H)*scale, pixelLimit)}
 }
 
 func (l pageLayout) firstPage(y float32) int {
+	if g := l.geometry.lazy; g != nil {
+		return g.firstPage(float64(y), l.scale, l.gap, l.rotation%2 != 0)
+	}
 	count := len(l.geometry.sizes)
 	return min(count-1, sort.Search(count, func(i int) bool {
 		return l.bottom(i) > float64(y)
@@ -216,13 +249,16 @@ func (v *Viewer) visiblePageRaster(page int, demand pageRasterDemand) rasterKey 
 	if !demand.tileAll && !v.needsTiles(page, key) {
 		return key
 	}
-	if frame := v.cache[page].frame; frame != nil && frame.key.Document == v.document && frame.frameBytes() <= demand.budget {
+	if frame := v.cache[page].frame; frame != nil && frame.key.Document == v.document && frame.key.Rotation == v.rotation && frame.frameBytes() <= demand.budget {
 		return frame.key
 	}
 	return v.layout.fallback(v.document, page, v.zoom, demand.budget)
 }
 
 func (v *Viewer) pageRasterError(page int, demand pageRasterDemand) error {
+	if g := v.layout.geometry.lazy; g != nil && g.failed[page] != nil {
+		return g.failed[page]
+	}
 	entry := v.cache[page]
 	if entry.err != nil && entry.failed == v.visiblePageRaster(page, demand) {
 		return entry.err
@@ -231,9 +267,18 @@ func (v *Viewer) pageRasterError(page int, demand pageRasterDemand) error {
 }
 
 func (v *Viewer) requestVisible(first, last int) pageRasterDemand {
+	if v.scroll.Y != v.lastScrollY {
+		v.scrollingUp = v.scroll.Y < v.lastScrollY
+		v.lastScrollY = v.scroll.Y
+	}
+	next := v.prefetchPage(first, last)
+	v.requestDimensions(first, last, next)
 	demand := v.pageRasterDemand(first, last)
 	var requests, refinements []rasterKey
 	for i := first; i <= last; i++ {
+		if !v.layout.geometry.exact(i) {
+			continue
+		}
 		key := v.visiblePageRaster(i, demand)
 		if v.cache[i].frame == nil {
 			requests = v.requestPage(requests, key)
@@ -244,19 +289,18 @@ func (v *Viewer) requestVisible(first, last int) pageRasterDemand {
 	missing := len(requests)
 	requests = append(requests, v.requestTiles(first, last, demand.tileAll)...)
 	requests = append(requests, refinements...)
-	if v.scroll.Y != v.lastScrollY {
-		v.scrollingUp = v.scroll.Y < v.lastScrollY
-		v.lastScrollY = v.scroll.Y
-	}
-	next := last + 1
-	if v.scrollingUp {
-		next = first - 1
-	}
-	if next >= 0 && next < len(v.pages) && v.cache[next].frame == nil {
+	if next >= 0 && next < len(v.pages) && v.layout.geometry.exact(next) && v.cache[next].frame == nil {
 		requests = v.requestPage(requests, v.layout.preview(v.document, next, v.zoom))
 	}
 	v.setRasterDemand(requests, next, missing, v.metadataRequests(first, last))
 	return demand
+}
+
+func (v *Viewer) prefetchPage(first, last int) int {
+	if v.scrollingUp {
+		return first - 1
+	}
+	return last + 1
 }
 
 func (v *Viewer) requestTiles(first, last int, all bool) []rasterKey {
@@ -281,7 +325,7 @@ func (v *Viewer) requestTiles(first, last int, all bool) []rasterKey {
 }
 
 func (v *Viewer) tileDistance(key rasterKey) int {
-	if key.Document != v.document || key.Page >= len(v.pages) {
+	if key.Document != v.document || key.Rotation != v.rotation || key.Page >= len(v.pages) {
 		return math.MaxInt
 	}
 	page := v.layout.page(key.Page)
@@ -339,6 +383,9 @@ func (v *Viewer) visibleTiles(first, last int, all bool) []rasterKey {
 	var keys []rasterKey
 	const maxTiles = render.TileBudget / (tileSide * tileSide * 4)
 	for i := first; i <= last; i++ {
+		if !v.layout.geometry.exact(i) {
+			continue
+		}
 		if !all && !v.needsTiles(i, v.layout.raster(v.document, i, v.scale)) {
 			continue
 		}
@@ -351,7 +398,7 @@ func (v *Viewer) visibleTiles(first, last int, all bool) []rasterKey {
 		for row := visible.Min.Y / tileSide * tileSide; row < visible.Max.Y; row += tileSide {
 			for col := visible.Min.X / tileSide * tileSide; col < visible.Max.X; col += tileSide {
 				box := image.Rect(col, row, min(size.X, col+tileSide), min(size.Y, row+tileSide))
-				keys = append(keys, rasterKey{Document: v.document, Page: i, Size: size, Tile: box})
+				keys = append(keys, rasterKey{Document: v.document, Page: i, Rotation: v.rotation, Size: size, Tile: box})
 				if len(keys) == maxTiles {
 					return keys
 				}
