@@ -40,11 +40,20 @@ type Viewer struct {
 	cancelDoc          context.CancelFunc
 	pages              []pageSize
 	wanted             []rasterKey
+	prefetch           rasterKey
+	missingBitmaps     int
+	metadata           map[int]cachedGeometry
+	metadataOrder      []int
+	metadataWanted     []geometryKey
+	metadataBytes      int
 	cache              map[int]cachedPage
 	recency            list.List
 	cacheSize          int
 	tiles              map[rasterKey]cachedPage
 	tileKeys           []rasterKey
+	tileBytes          int
+	lastScrollY        float32
+	scrollingUp        bool
 	scale              float64
 
 	scroll        ui.ScrollState
@@ -115,8 +124,10 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 			v.navigation = pageNavigation{page: page, y: v.scroll.Y}
 		}
 	}
+	v.lastScrollY = v.scroll.Y
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
-	v.setWanted(nil)
+	v.setRasterDemand(nil, -1, 0, nil)
+	v.resetMetadata()
 	v.clearTiles()
 	// Install only images from the new document so its text and links match the display.
 	first, last := frames[0].key.Page, frames[len(frames)-1].key.Page
@@ -150,9 +161,13 @@ func (v *Viewer) clearDocument() {
 		v.docContext, v.cancelDoc = nil, nil
 	}
 	v.document, v.pages, v.wanted = 0, nil, nil
+	v.prefetch = rasterKey{}
+	v.missingBitmaps = 0
+	v.resetMetadata()
 	v.layout, v.zoom = pageLayout{}, 1
 	v.navigation = pageNavigation{}
 	v.scroll.X, v.scroll.Y = 0, 0
+	v.lastScrollY, v.scrollingUp = 0, false
 	v.hasSelection, v.pointer = false, pointerDrag{}
 	clear(v.cache)
 	v.clearTiles()
@@ -179,16 +194,22 @@ func (v *Viewer) Close() {
 // Done closes when the worker has released the native document. It can be used from any goroutine.
 func (v *Viewer) Done() <-chan struct{} { return v.worker.done }
 
-func (v *Viewer) setWanted(keys []rasterKey) {
-	if !slices.Equal(keys, v.wanted) {
-		v.wanted = keys
-		v.worker.submitPages(keys)
+func (v *Viewer) setRasterDemand(keys []rasterKey, prefetchPage, missing int, metadata []geometryKey) {
+	var prefetch rasterKey
+	if len(keys) > 0 && keys[len(keys)-1].Page == prefetchPage {
+		prefetch = keys[len(keys)-1]
+	}
+	if !slices.Equal(keys, v.wanted) || v.prefetch != prefetch ||
+		v.missingBitmaps != missing || !slices.Equal(metadata, v.metadataWanted) {
+		v.wanted, v.prefetch, v.missingBitmaps, v.metadataWanted = keys, prefetch, missing, metadata
+		v.worker.submitPages(keys, prefetch, missing, metadata)
 	}
 }
 
 func (v *Viewer) clearTiles() {
 	clear(v.tiles)
 	v.tileKeys = nil
+	v.tileBytes = 0
 }
 
 func (v *Viewer) finishPage(key rasterKey, frame *pageFrame, err error) bool {
@@ -199,11 +220,15 @@ func (v *Viewer) finishPage(key rasterKey, frame *pageFrame, err error) bool {
 		entry := v.tiles[key]
 		if err == nil {
 			frame.installBitmap(entry.frame)
-			entry = cachedPage{frame: frame}
+			v.tiles[key] = cachedPage{frame: frame}
+			if entry.frame == nil {
+				v.tileBytes += frame.frameBytes()
+			}
+			v.trimTiles()
 		} else {
 			entry.failed, entry.err = key, err
+			v.tiles[key] = entry
 		}
-		v.tiles[key] = entry
 		return true
 	}
 	if err == nil {
@@ -248,9 +273,6 @@ func (f *pageFrame) installBitmap(old *pageFrame) {
 }
 
 func (f *pageFrame) frameBytes() int {
-	size := f.key.Size.X*f.key.Size.Y*4 + len(f.chars)*16
-	for _, link := range f.links {
-		size += link.Bytes()
-	}
-	return size
+	region := f.key.Region()
+	return region.Dx() * region.Dy() * 4
 }

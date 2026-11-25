@@ -61,7 +61,9 @@ func TestCancelQueuedDocumentPreservesDisplayedGeneration(t *testing.T) {
 				}
 			}, 420, 360)
 			first := v.LoadBytes(t.Context(), samplePDF(4), OpenDocument)
-			await(t, updates, view, func() bool { return v.State().DisplayedGeneration == first && len(v.wanted) == 0 })
+			await(t, updates, view, func() bool {
+				return v.State().DisplayedGeneration == first && len(v.wanted) == 0 && len(v.metadataWanted) == 0
+			})
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			request := v.LoadBytes(ctx, samplePDF(3), RefreshDocument)
@@ -98,11 +100,7 @@ func TestCancelQueuedDocumentPreservesDisplayedGeneration(t *testing.T) {
 }
 
 func TestGoToPageWithMultipleVisiblePages(t *testing.T) {
-	updates := make(chan func(), 12)
-	v := newViewer(func(fn func()) { updates <- fn }, testEngine(t))
-	t.Cleanup(func() { v.Close(); <-v.Done() })
-	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil) }, 510, 900)
-	view.Frame()
+	v, view, updates := newTestView(t, 510, 900)
 
 	for _, count := range []int{2, 10} {
 		data := bytes.ReplaceAll(samplePDF(count), []byte("[0 0 300 430]"), []byte("[0 0 500 280]"))
@@ -130,11 +128,7 @@ func TestGoToPageWithMultipleVisiblePages(t *testing.T) {
 }
 
 func TestViewerNavigationAndFit(t *testing.T) {
-	updates := make(chan func(), 12)
-	v := newViewer(func(fn func()) { updates <- fn }, testEngine(t))
-	t.Cleanup(func() { v.Close(); <-v.Done() })
-	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil) }, 500, 350)
-	view.Frame()
+	v, view, updates := newTestView(t, 500, 350)
 	v.LoadBytes(t.Context(), samplePDF(4), OpenDocument)
 	await(t, updates, view, func() bool { return v.State().PageCount == 4 })
 	v.SetZoom(2)
@@ -142,7 +136,7 @@ func TestViewerNavigationAndFit(t *testing.T) {
 		t.Fatalf("unexpected navigation: %+v", v.State())
 	}
 	v.SetFit(FitPage)
-	if s := v.State(); s.Fit != FitPage || s.Zoom != 1 || v.layout.pages[1].H > v.height {
+	if s := v.State(); s.Fit != FitPage || s.Zoom != 1 || v.layout.page(1).H > v.height {
 		t.Fatalf("unexpected page fit: %+v", s)
 	}
 	v.LoadBytes(t.Context(), samplePDF(3), OpenDocument)

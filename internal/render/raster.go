@@ -6,20 +6,20 @@ import (
 )
 
 const (
-	BitmapBudget = 24 << 20
-	TileBudget   = 40 << 20
-	PageMetadata = 1 << 20
-	MaxPixels    = 4_000_000
-	maxSide      = 4096
+	BitmapBudget   = 24 << 20
+	TileBudget     = 40 << 20
+	MetadataBudget = 8 << 20
+	PageMetadata   = 1 << 20
+	MaxPixels      = 4_000_000
+	maxSide        = 4096
 )
 
-// Key identifies the raster and metadata for one document generation.
+// Key identifies a raster for one document generation.
 type Key struct {
 	Document uint64
 	Page     int
 	Size     image.Point
 	Tile     image.Rectangle
-	Metadata int
 }
 
 func (key Key) Region() image.Rectangle {

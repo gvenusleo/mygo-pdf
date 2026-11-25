@@ -9,6 +9,8 @@ import (
 
 type cLong = uint32
 
+func newPauseCallback(fn func(uintptr) uintptr) uintptr { return purego.NewCallback(fn) }
+
 func openLibrary(path string) (library, error) {
 	handle, err := windows.LoadLibraryEx(path, 0, windows.LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|windows.LOAD_LIBRARY_SEARCH_SYSTEM32)
 	if err != nil {

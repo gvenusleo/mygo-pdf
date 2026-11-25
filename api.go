@@ -143,14 +143,21 @@ func (v *Viewer) State() State {
 	s.Page = v.currentPage() + 1
 	s.Render = RenderReady
 	first, last := v.visiblePages()
+	var demand pageRasterDemand
 	for i := first; i <= last; i++ {
-		entry := v.cache[i]
-		if entry.err != nil {
+		var rasterErr error
+		if v.cache[i].err != nil {
+			if demand.budget == 0 {
+				demand = v.pageRasterDemand(first, last)
+			}
+			rasterErr = v.pageRasterError(i, demand)
+		}
+		if rasterErr != nil {
 			s.Render = RenderFailed
 			if s.Err == nil {
-				s.Err = entry.err
+				s.Err = rasterErr
 			}
-		} else if entry.frame == nil && s.Render != RenderFailed {
+		} else if v.cache[i].frame == nil && s.Render != RenderFailed {
 			s.Render = RenderPending
 		}
 	}
@@ -213,7 +220,11 @@ func (v *Viewer) GoToPage(page int) bool {
 	if page < 1 || page > len(v.pages) {
 		return false
 	}
-	v.navigateTo(page, v.layout.offset(readingPosition{page: page - 1}))
+	y := float32(0)
+	if page > 1 {
+		y = v.layout.page(page - 1).Y
+	}
+	v.navigateTo(page, y)
 	v.redraw()
 	return true
 }
@@ -234,7 +245,7 @@ func (v *Viewer) SetFit(fit Fit) {
 	}
 	anchor := v.anchor()
 	v.fit, v.zoom = fit, 1
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = v.layout.geometry.fit(v.loadViewport())
 	v.scroll.Y = min(v.layout.offset(anchor), max(0, v.layout.height-v.height))
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
 	v.redraw()
@@ -253,9 +264,8 @@ func (v *Viewer) currentPage() int {
 	}
 	y := v.scroll.Y + v.height/2
 	page := v.layout.firstPage(y)
-	if page > 0 && y < v.layout.pages[page].Y {
-		before := v.layout.pages[page-1]
-		if y-before.Y-before.H <= v.layout.pages[page].Y-y {
+	if page > 0 && float64(y) < v.layout.top(page) {
+		if float64(y)-v.layout.bottom(page-1) <= v.layout.top(page)-float64(y) {
 			page--
 		}
 	}
@@ -263,8 +273,8 @@ func (v *Viewer) currentPage() int {
 }
 
 func (v *Viewer) visibleWorkPending() bool {
-	_, last := v.visiblePages()
+	first, last := v.visiblePages()
 	return slices.ContainsFunc(v.wanted, func(key rasterKey) bool {
-		return key.Page <= last && v.cache[key.Page].failed != key && v.tiles[key].failed != key
+		return key.Page >= first && key.Page <= last && v.cache[key.Page].failed != key && v.tiles[key].failed != key
 	})
 }

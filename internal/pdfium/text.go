@@ -2,7 +2,8 @@ package pdfium
 
 import (
 	"context"
-	"image"
+	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"unicode/utf16"
@@ -29,45 +30,82 @@ func (r Rect) Contains(x, y float32) bool {
 type Link struct {
 	Bounds Rect
 	Page   int
-	Target Point
+	Target Destination
 	URL    string
 }
 
-func (link Link) Bytes() int { return 48 + len(link.URL) }
+func (link Link) Bytes() int { return 80 + len(link.URL) }
 
-type Frame struct {
-	Pixels *image.RGBA
-	Chars  []Rect
-	Links  []Link
+// SelectionBox holds the font bounds and inline axis used for highlighting.
+type SelectionBox struct {
+	Rect
+	Vertical bool
 }
 
-func (e *Engine) frame(ctx context.Context, doc *Document, page uintptr, key render.Key, img *image.RGBA) (*Frame, error) {
-	f := &Frame{Pixels: img}
+type Geometry struct {
+	Chars     []Rect
+	Selection []SelectionBox
+	Links     []Link
+}
+
+const selectionBoxBytes = 20
+
+func (g *Geometry) textBytes() int { return 16*cap(g.Chars) + selectionBoxBytes*cap(g.Selection) }
+
+func (g *Geometry) Bytes() int {
+	bytes := g.textBytes()
+	for _, link := range g.Links {
+		bytes += link.Bytes()
+	}
+	return bytes
+}
+
+func (e *Engine) ReadGeometry(ctx context.Context, doc *Document, index int) (*Geometry, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	page := e.loadPage(doc.handle, int32(index))
+	if page == 0 {
+		return nil, fmt.Errorf("cannot read PDF page %d", index+1)
+	}
+	defer e.closePage(page)
+	f := &Geometry{}
 	f.Links = e.annotations(ctx, doc, page)
-	if text := e.loadText(page); text != 0 {
+	text := e.loadText(page)
+	if text != 0 {
 		defer e.closeText(text)
 		if doc.copy {
-			f.Chars = e.characterBoxes(ctx, page, text, key.Metadata)
+			f.Chars = e.characterBoxes(ctx, page, text)
 		}
 		f.Links = e.webLinks(ctx, page, text, f.Links)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	remaining := key.Metadata - 16*len(f.Chars)
+	remaining := render.PageMetadata - f.textBytes()
 	for i, link := range f.Links {
-		remaining -= link.Bytes()
-		if remaining < 0 {
+		if size := link.Bytes(); size <= remaining {
+			remaining -= size
+		} else {
 			clear(f.Links[i:])
 			f.Links = f.Links[:i]
 			break
 		}
 	}
+	if e.looseCharBox != nil && len(f.Chars) > 0 {
+		// Use the spare metadata budget so extra bounds cannot displace hit boxes or links.
+		f.Selection = e.selectionBoxes(ctx, page, text, f.Chars[:min(len(f.Chars), remaining/selectionBoxBytes)])
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return f, nil
 }
 
-func (e *Engine) characterBoxes(ctx context.Context, page, text uintptr, budget int) []Rect {
-	boxes := make([]Rect, max(0, min(int(e.charCount(text)), maxPageChars, budget/32)))
+func (e *Engine) characterBoxes(ctx context.Context, page, text uintptr) []Rect {
+	boxes := make([]Rect, max(0, min(int(e.charCount(text)), maxPageChars, render.PageMetadata/32)))
 	for i := range boxes {
 		if i%128 == 0 && ctx.Err() != nil {
 			return nil
@@ -78,6 +116,37 @@ func (e *Engine) characterBoxes(ctx context.Context, page, text uintptr, budget 
 		}
 	}
 	return boxes
+}
+
+func (e *Engine) selectionBoxes(ctx context.Context, page, text uintptr, chars []Rect) []SelectionBox {
+	boxes := make([]SelectionBox, len(chars))
+	var rotation float64
+	if e.pageRotation != nil {
+		rotation = float64(e.pageRotation(page)) * math.Pi / 2
+	}
+	for i, tight := range chars {
+		if i%128 == 0 && ctx.Err() != nil {
+			return nil
+		}
+		boxes[i] = e.selectionBox(page, text, int32(i), tight, rotation)
+	}
+	return boxes
+}
+
+func (e *Engine) selectionBox(page, text uintptr, index int32, tight Rect, rotation float64) SelectionBox {
+	var bounds pdfRect
+	if e.looseCharBox(text, index, &bounds) != 0 {
+		if loose := e.normalizedRect(page, float64(bounds.left), float64(bounds.top), float64(bounds.right), float64(bounds.bottom)); loose.W > 0 && loose.H > 0 {
+			tight = loose
+		}
+	}
+	angle := rotation
+	if e.charAngle != nil {
+		if value := e.charAngle(text, index); value >= 0 {
+			angle += float64(value)
+		}
+	}
+	return SelectionBox{Rect: tight, Vertical: math.Abs(math.Sin(angle)) > math.Abs(math.Cos(angle))}
 }
 
 func (e *Engine) normalizedRect(page uintptr, left, top, right, bottom float64) Rect {
@@ -106,7 +175,7 @@ func (e *Engine) annotations(ctx context.Context, doc *Document, page uintptr) [
 		if e.linkRect(annot, &rect) == 0 {
 			continue
 		}
-		link := e.annotationTarget(doc, annot)
+		link := e.annotationTarget(ctx, doc, annot)
 		if link.Page < 0 && link.URL == "" {
 			continue
 		}
@@ -116,7 +185,7 @@ func (e *Engine) annotations(ctx context.Context, doc *Document, page uintptr) [
 	return links
 }
 
-func (e *Engine) annotationTarget(doc *Document, annot uintptr) Link {
+func (e *Engine) annotationTarget(ctx context.Context, doc *Document, annot uintptr) Link {
 	const gotoPage = 1
 	const uri = 3
 	link := Link{Page: -1}
@@ -138,61 +207,10 @@ func (e *Engine) annotationTarget(doc *Document, annot uintptr) Link {
 	if dest != 0 {
 		if page := int(e.destPage(doc.handle, dest)); page >= 0 && page < len(doc.Pages) {
 			link.Page = page
-			link.Target = e.destinationPoint(doc.handle, int32(page), dest)
+			link.Target = e.destination(ctx, doc, page, dest)
 		}
 	}
 	return link
-}
-
-func (e *Engine) destinationPoint(doc uintptr, index int32, dest uintptr) Point {
-	const (
-		fitHorizontal = 3
-		fitVertical   = 4
-		fitRectangle  = 5
-		fitBoundsH    = 7
-		fitBoundsV    = 8
-	)
-	var count cLong
-	var params [4]float32
-	view := e.destView(dest, &count, &params[0])
-	var x, y, zoom float32
-	var hasX, hasY, hasZoom int32
-	if e.destLocation(dest, &hasX, &hasY, &hasZoom, &x, &y, &zoom) == 0 {
-		switch {
-		case count >= 1 && (view == fitHorizontal || view == fitBoundsH):
-			y, hasY = params[0], 1
-		case count >= 1 && (view == fitVertical || view == fitBoundsV):
-			x, hasX = params[0], 1
-		case count >= 4 && view == fitRectangle:
-			x, y, hasX, hasY = params[0], params[3], 1, 1
-		default:
-			return Point{}
-		}
-	}
-	if hasX == 0 && hasY == 0 {
-		return Point{}
-	}
-	page := e.loadPage(doc, index)
-	if page == 0 {
-		return Point{}
-	}
-	defer e.closePage(page)
-	var bounds pdfRect
-	if e.pageBounds(page, &bounds) == 0 {
-		return Point{}
-	}
-	if hasX == 0 {
-		x = bounds.left
-	}
-	if hasY == 0 {
-		y = bounds.top
-	}
-	const extent = 1 << 16
-	var dx, dy int32
-	if e.pageToDevice(page, 0, 0, extent, extent, 0, float64(x), float64(y), &dx, &dy) == 0 {
-		return Point{}
-	}
-	return Point{X: float32(max(0, min(extent, dx))) / extent, Y: float32(max(0, min(extent, dy))) / extent}
 }
 
 func (e *Engine) webLinks(ctx context.Context, page, text uintptr, links []Link) []Link {

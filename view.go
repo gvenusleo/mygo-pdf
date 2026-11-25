@@ -41,12 +41,12 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 		}
 	})
 	first, last := v.visiblePages()
-	v.requestVisible(first, last)
+	demand := v.requestVisible(first, last)
 	v.notify()
 	scroll.Children(func() {
 		ui.Box(c).Size(v.layout.width, v.layout.height).Shrink(0).Children(func() {
 			for i := first; i <= last; i++ {
-				v.pageView(c, i)
+				v.pageView(c, i, demand)
 			}
 		})
 	})
@@ -79,9 +79,9 @@ func (v *Viewer) contextMenu(m *ui.Menu, services ui.Services) {
 	}
 }
 
-func (v *Viewer) pageView(c *ui.Context, index int) {
+func (v *Viewer) pageView(c *ui.Context, index int, demand pageRasterDemand) {
 	t := c.Theme()
-	r := v.layout.pages[index]
+	r := v.layout.page(index)
 	entry := v.cache[index]
 	label := fmt.Sprintf(cmp.Or(v.options.Labels.Page, "Page %d"), index+1)
 	// Changing the document key releases pointer capture from the previous page.
@@ -91,30 +91,54 @@ func (v *Viewer) pageView(c *ui.Context, index int) {
 	}{v.document, index}
 	page := ui.Box(c.Key(key)).Absolute().Left(r.X).Top(r.Y).Size(r.W, r.H).Clip().Label(label)
 	frame := entry.frame
-	if frame == nil && entry.err != nil {
-		page.Background(t.Background)
-		page.Center().Children(func() { ui.Text(c, entry.err.Error()).TextColor(t.TextMuted) })
+	if frame == nil {
+		if err := v.pageRasterError(index, demand); err != nil {
+			page.Background(t.Background)
+			page.Center().Children(func() { ui.Text(c, err.Error()).TextColor(t.TextMuted) })
+		}
 	}
-	if frame != nil && frame.key.Document == v.document {
-		page.HandleInput(v.pageInput(index, frame, r))
+	data := v.metadata[index].data
+	if data != nil && frame != nil {
+		page.HandleInput(v.pageInput(v.document, index, data, r))
 		if x, y, over := page.PointerPosition(); over {
 			switch {
-			case linkAt(frame, x/r.W, y/r.H) >= 0:
+			case linkAt(data, x/r.W, y/r.H) >= 0:
 				page.Cursor(ui.CursorPointer)
-			case characterAt(frame, x/r.W, y/r.H, false) >= 0:
+			case characterAt(data, x/r.W, y/r.H, false) >= 0:
 				page.Cursor(ui.CursorText)
 			}
 		}
 	}
 	page.Children(func() {
-		if frame != nil {
+		if frame != nil && !v.tilesCoverViewport(index, r) {
 			ui.Image(c, frame.bitmap).Absolute().Size(r.W, r.H).AccessHidden(true)
 		}
 		v.tileViews(c, index, r)
-		if frame != nil {
-			v.highlight(c, index, frame, r)
+		if data != nil && frame != nil {
+			v.highlight(c, index, data, r)
 		}
 	})
+}
+
+func (v *Viewer) tilesCoverViewport(page int, bounds ui.Rect) bool {
+	for _, key := range v.tileKeys {
+		if key.Page != page {
+			continue
+		}
+		visible := v.tileViewport(bounds, key.Size)
+		if visible.Empty() {
+			return false
+		}
+		missing := visible.Dx() * visible.Dy()
+		for _, tile := range v.tileKeys {
+			if tile.Page == page && v.tiles[tile].frame != nil {
+				covered := tile.Tile.Intersect(visible)
+				missing -= covered.Dx() * covered.Dy()
+			}
+		}
+		return missing == 0
+	}
+	return false
 }
 
 func (v *Viewer) tileViews(c *ui.Context, page int, bounds ui.Rect) {
@@ -130,11 +154,11 @@ func (v *Viewer) tileViews(c *ui.Context, page int, bounds ui.Rect) {
 	}
 }
 
-func (v *Viewer) highlight(c *ui.Context, page int, frame *pageFrame, bounds ui.Rect) {
-	if !v.hasSelection || frame.key.Document != v.document || page < v.selection.First.Page || page > v.selection.Last.Page {
+func (v *Viewer) highlight(c *ui.Context, page int, data *geometry, bounds ui.Rect) {
+	if !v.hasSelection || page < v.selection.First.Page || page > v.selection.Last.Page {
 		return
 	}
-	start, end := 0, len(frame.chars)
+	start, end := 0, len(data.Chars)
 	if page == v.selection.First.Page {
 		start = min(v.selection.First.Index, end)
 	}
@@ -142,22 +166,40 @@ func (v *Viewer) highlight(c *ui.Context, page int, frame *pageFrame, bounds ui.
 		end = min(end, v.selection.Last.Index+1)
 	}
 	color := c.Theme().Selection
-	// Merge adjacent glyphs on the same line to limit the number of highlight views.
-	var line ui.Rect
-	for _, rect := range frame.chars[min(start, end):end] {
-		if rect.W == 0 || rect.H == 0 {
+	var line, previous ui.Rect
+	var wasVertical bool
+	for i := min(start, end); i < end; i++ {
+		rect, vertical := ui.Rect(data.Chars[i]), false
+		if i < len(data.Selection) {
+			box := data.Selection[i]
+			rect, vertical = ui.Rect(box.Rect), box.Vertical
+		}
+		if rect.W <= 0 || rect.H <= 0 {
 			continue
 		}
-		if line.W > 0 && rect.Y < line.Y+line.H*0.75 && line.Y < rect.Y+rect.H*0.75 &&
-			rect.X <= line.X+line.W+0.02 && line.X <= rect.X+rect.W+0.02 {
+		if line.W > 0 && vertical == wasVertical && sameSelectionLine(previous, rect, bounds, vertical) {
 			x, y := min(line.X, rect.X), min(line.Y, rect.Y)
 			line = ui.Rect{X: x, Y: y, W: max(line.X+line.W, rect.X+rect.W) - x, H: max(line.Y+line.H, rect.Y+rect.H) - y}
-			continue
+		} else {
+			highlightRect(c, line, bounds, color)
+			line = rect
 		}
-		highlightRect(c, line, bounds, color)
-		line = ui.Rect(rect)
+		previous, wasVertical = rect, vertical
 	}
 	highlightRect(c, line, bounds, color)
+}
+
+func sameSelectionLine(a, b, page ui.Rect, vertical bool) bool {
+	inline, cross := page.W, page.H
+	if vertical {
+		a = ui.Rect{X: a.Y, Y: a.X, W: a.H, H: a.W}
+		b = ui.Rect{X: b.Y, Y: b.X, W: b.H, H: b.W}
+		inline, cross = cross, inline
+	}
+	// Bridge word spacing, but stop at a different line or a wide column gap.
+	overlap := min(a.Y+a.H, b.Y+b.H) - max(a.Y, b.Y)
+	gap := max(a.X-b.X-b.W, b.X-a.X-a.W)
+	return overlap >= min(a.H, b.H)/2 && gap*inline <= max(a.H, b.H)*cross
 }
 
 func highlightRect(c *ui.Context, r, bounds ui.Rect, color ui.Color) {

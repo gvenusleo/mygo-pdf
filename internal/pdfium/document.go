@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/gvenusleo/mygo-pdf/internal/render"
 	"image"
 	"runtime"
 	"unsafe"
+
+	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
 // MaxPDFBytes is the maximum input size for a single PDF.
@@ -25,11 +26,12 @@ var (
 type PageSize struct{ Width, Height float32 }
 
 type Document struct {
-	ID     uint64
-	handle uintptr
-	pin    runtime.Pinner
-	Pages  []PageSize
-	copy   bool
+	ID           uint64
+	handle       uintptr
+	pin          runtime.Pinner
+	Pages        []PageSize
+	copy         bool
+	contentAreas map[int]Rect
 }
 
 func (e *Engine) Open(ctx context.Context, id uint64, data []byte) (*Document, error) {
@@ -106,7 +108,7 @@ func (e *Engine) Close(doc *Document) {
 	}
 }
 
-func (e *Engine) drawPage(page uintptr, key render.Key) (*image.RGBA, error) {
+func (e *Engine) drawPage(ctx context.Context, page uintptr, key render.Key, background bool) (*image.RGBA, error) {
 	region := key.Region()
 	img := image.NewRGBA(image.Rectangle{Max: region.Size()})
 	width, height := int32(region.Dx()), int32(region.Dy())
@@ -124,12 +126,24 @@ func (e *Engine) drawPage(page uintptr, key render.Key) (*image.RGBA, error) {
 	}
 	const annotations = 1
 	const reverseByteOrder = 0x10
-	e.renderBitmap(bitmap, page, -int32(region.Min.X), -int32(region.Min.Y), int32(key.Size.X), int32(key.Size.Y), 0, annotations|reverseByteOrder)
+	x, y := -int32(region.Min.X), -int32(region.Min.Y)
+	fullWidth, fullHeight := int32(key.Size.X), int32(key.Size.Y)
+	if e.HasProgressiveRendering() {
+		if err := e.drawProgressive(ctx, bitmap, page, x, y, fullWidth, fullHeight, annotations|reverseByteOrder, background); err != nil {
+			return nil, err
+		}
+	} else {
+		e.renderBitmap(bitmap, page, x, y, fullWidth, fullHeight, 0, annotations|reverseByteOrder)
+	}
 	return img, nil
 }
 
-func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key) (*Frame, error) {
-	mu.Lock()
+func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key, background bool) (*image.RGBA, error) {
+	if !acquireRenderSlot(ctx, background) {
+		return nil, ctx.Err()
+	}
+	defer releaseRenderSlot(background)
+	mu.lock(ctx, background)
 	defer mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -139,17 +153,14 @@ func (e *Engine) Render(ctx context.Context, doc *Document, key render.Key) (*Fr
 		return nil, fmt.Errorf("cannot read PDF page %d", key.Page+1)
 	}
 	defer e.closePage(page)
-	img, err := e.drawPage(page, key)
+	img, err := e.drawPage(ctx, page, key, background)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !key.Tile.Empty() {
-		return &Frame{Pixels: img}, nil
-	}
-	return e.frame(ctx, doc, page, key, img)
+	return img, nil
 }
 
 func trimCString(data []byte) string {

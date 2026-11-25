@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf/internal/pdfium"
 )
 
 type pointerDrag struct {
@@ -67,9 +68,9 @@ func (v *Viewer) copySelection(services ui.Services) {
 	}
 }
 
-func (v *Viewer) pageInput(page int, frame *pageFrame, bounds ui.Rect) func(ui.InputEvent) bool {
+func (v *Viewer) pageInput(document uint64, page int, data *geometry, bounds ui.Rect) func(ui.InputEvent) bool {
 	return func(ev ui.InputEvent) bool {
-		if frame.key.Document != v.document {
+		if document != v.document {
 			return false
 		}
 		switch ev.Kind {
@@ -80,8 +81,8 @@ func (v *Viewer) pageInput(page int, frame *pageFrame, bounds ui.Rect) func(ui.I
 				return false
 			}
 			v.hasSelection = false
-			index := characterAt(frame, ev.X/bounds.W, ev.Y/bounds.H, false)
-			v.pointer = pointerDrag{down: true, x: ev.X, y: ev.Y, start: textPoint{Page: page, Index: index}, link: linkAt(frame, ev.X/bounds.W, ev.Y/bounds.H)}
+			index := characterAt(data, ev.X/bounds.W, ev.Y/bounds.H, false)
+			v.pointer = pointerDrag{down: true, x: ev.X, y: ev.Y, start: textPoint{Page: page, Index: index}, link: linkAt(data, ev.X/bounds.W, ev.Y/bounds.H)}
 			return true
 		case ui.InputPointerMove:
 			if v.pointer.down && ev.Button == 0 {
@@ -94,8 +95,8 @@ func (v *Viewer) pageInput(page int, frame *pageFrame, bounds ui.Rect) func(ui.I
 			}
 			if !ev.Canceled {
 				v.extendSelection(ev, bounds)
-				if link := v.pointer.link; !v.pointer.moved && link >= 0 && link == linkAt(frame, ev.X/bounds.W, ev.Y/bounds.H) {
-					v.openLink(frame.links[link])
+				if link := v.pointer.link; !v.pointer.moved && link >= 0 && link == linkAt(data, ev.X/bounds.W, ev.Y/bounds.H) {
+					v.openLink(data.Links[link])
 				}
 			}
 			v.pointer = pointerDrag{}
@@ -116,12 +117,12 @@ func (v *Viewer) extendSelection(ev ui.InputEvent, bounds ui.Rect) {
 	}
 	x, y := bounds.X+ev.X, bounds.Y+ev.Y
 	page := v.layout.firstPage(y)
-	frame := v.cache[page].frame
-	if frame == nil || frame.key.Document != v.document {
+	data := v.metadata[page].data
+	if data == nil {
 		return
 	}
-	r := v.layout.pages[page]
-	if index := characterAt(frame, (x-r.X)/r.W, (y-r.Y)/r.H, true); index >= 0 {
+	r := v.layout.page(page)
+	if index := characterAt(data, (x-r.X)/r.W, (y-r.Y)/r.H, true); index >= 0 {
 		first, last := drag.start, textPoint{Page: page, Index: index}
 		if first.Page > last.Page || first.Page == last.Page && first.Index > last.Index {
 			first, last = last, first
@@ -136,19 +137,79 @@ func (v *Viewer) openLink(link pageLink) {
 		return
 	}
 	if link.Page >= 0 && link.Page < len(v.pages) {
-		page := v.layout.pages[link.Page]
-		v.scroll.X = max(0, min(page.X+link.Target.X*page.W, v.layout.width-v.width))
-		v.navigateTo(link.Page+1, page.Y+link.Target.Y*page.H)
+		v.goToDestination(link.Page, link.Target)
 	}
 }
 
-func linkAt(frame *pageFrame, x, y float32) int {
-	return slices.IndexFunc(frame.links, func(link pageLink) bool { return link.Bounds.Contains(x, y) })
+func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
+	position := dest.Position
+	if dest.Mode == pdfium.DestinationXYZ && (!dest.HasX || !dest.HasY) {
+		current := v.layout.page(v.currentPage())
+		if !dest.HasX {
+			position.X = max(0, min(1, (v.scroll.X-current.X)/current.W))
+		}
+		if !dest.HasY {
+			position.Y = max(0, min(1, (v.scroll.Y-current.Y)/current.H))
+		}
+	}
+	vp := v.loadViewport()
+	vp.zoom = 1
+	baseScale := v.layout.geometry.fit(vp).scale
+	size := v.pages[index]
+	area := dest.Area
+	width := float64(size.Width) * float64(area.W)
+	height := float64(size.Height) * float64(area.H)
+	availableWidth := float64(max(1, v.width-2*v.gap))
+	availableHeight := float64(max(1, v.height-2*v.gap))
+	scale := v.layout.scale
+	switch dest.Mode {
+	case pdfium.DestinationXYZ:
+		if dest.Scale > 0 {
+			scale = float64(dest.Scale)
+		}
+	case pdfium.DestinationFit, pdfium.DestinationFitB, pdfium.DestinationFitR:
+		scale = min(availableWidth/width, availableHeight/height)
+	case pdfium.DestinationFitH, pdfium.DestinationFitBH:
+		scale = availableWidth / width
+	case pdfium.DestinationFitV, pdfium.DestinationFitBV:
+		scale = availableHeight / height
+	}
+	if dest.Mode != pdfium.DestinationXYZ {
+		if !dest.HasX {
+			position.X = area.X
+		}
+		if !dest.HasY {
+			position.Y = area.Y
+		}
+	}
+	v.zoom = max(0.5, min(4, float32(scale/baseScale)))
+	vp.zoom = v.zoom
+	v.layout = v.layout.geometry.fit(vp)
+	page := v.layout.page(index)
+	x := page.X + position.X*page.W
+	y := page.Y + position.Y*page.H
+	if dest.Mode == pdfium.DestinationFit || dest.Mode == pdfium.DestinationFitB || dest.Mode == pdfium.DestinationFitR {
+		x -= max(0, v.width-area.W*page.W) / 2
+		y -= max(0, v.height-area.H*page.H) / 2
+	}
+	// An edge coordinate can put the whole target outside the viewport.
+	if x >= page.X+page.W || x+v.width <= page.X {
+		x = page.X
+	}
+	if y >= page.Y+page.H || y+v.height <= page.Y {
+		y = page.Y
+	}
+	v.scroll.X = max(0, min(x, v.layout.width-v.width))
+	v.navigateTo(index+1, y)
 }
 
-func characterAt(frame *pageFrame, x, y float32, nearest bool) int {
+func linkAt(data *geometry, x, y float32) int {
+	return slices.IndexFunc(data.Links, func(link pageLink) bool { return link.Bounds.Contains(x, y) })
+}
+
+func characterAt(data *geometry, x, y float32, nearest bool) int {
 	index, distance := -1, float32(math.MaxFloat32)
-	for i, box := range frame.chars {
+	for i, box := range data.Chars {
 		if box.W == 0 || box.H == 0 {
 			continue
 		}

@@ -26,11 +26,17 @@ type Engine struct {
 	fillBitmap      func(uintptr, int32, int32, int32, int32, cLong) int32
 	destroyBitmap   func(uintptr)
 	renderBitmap    func(uintptr, uintptr, int32, int32, int32, int32, int32, int32)
+	renderStart     func(uintptr, uintptr, int32, int32, int32, int32, int32, int32, *renderPause) int32
+	renderContinue  func(uintptr, *renderPause) int32
+	renderClose     func(uintptr)
 	pageToDevice    func(uintptr, int32, int32, int32, int32, int32, float64, float64, *int32, *int32) int32
 	loadText        func(uintptr) uintptr
 	closeText       func(uintptr)
 	charCount       func(uintptr) int32
 	charBox         func(uintptr, int32, *float64, *float64, *float64, *float64) int32
+	looseCharBox    func(uintptr, int32, *pdfRect) int32
+	charAngle       func(uintptr, int32) float32
+	pageRotation    func(uintptr) int32
 	getText         func(uintptr, int32, int32, *uint16) int32
 	nextLink        func(uintptr, *int32, *uintptr) int32
 	linkRect        func(uintptr, *pdfRect) int32
@@ -43,6 +49,10 @@ type Engine struct {
 	destView        func(uintptr, *cLong, *float32) cLong
 	destLocation    func(uintptr, *int32, *int32, *int32, *float32, *float32, *float32) int32
 	pageBounds      func(uintptr, *pdfRect) int32
+	pageObjectCount func(uintptr) int32
+	pageObject      func(uintptr, int32) uintptr
+	objectBounds    func(uintptr, *float32, *float32, *float32, *float32) int32
+	objectActive    func(uintptr, *int32) int32
 	loadWebLinks    func(uintptr) uintptr
 	closeWebLinks   func(uintptr)
 	webLinkCount    func(uintptr) int32
@@ -59,7 +69,7 @@ type library struct {
 var (
 	ErrUnsupported = errors.New("unsupported PDFium platform")
 	ErrLibrary     = errors.New("PDFium library unavailable")
-	mu             sync.Mutex
+	mu             = &nativeGate{Cond: sync.Cond{L: new(sync.Mutex)}}
 	engines        = make(map[string]*Engine)
 )
 
@@ -105,6 +115,20 @@ func loadEngine(path string) (*Engine, error) {
 			lib.close()
 			return nil, fmt.Errorf("missing PDFium symbol %s: %w", symbol.name, err)
 		}
+	}
+	for _, symbol := range []binding{
+		{"FPDF_RenderPageBitmap_Start", &e.renderStart},
+		{"FPDF_RenderPage_Continue", &e.renderContinue},
+		{"FPDF_RenderPage_Close", &e.renderClose},
+		{"FPDFPage_CountObjects", &e.pageObjectCount},
+		{"FPDFPage_GetObject", &e.pageObject},
+		{"FPDFPageObj_GetBounds", &e.objectBounds},
+		{"FPDFPageObj_GetIsActive", &e.objectActive},
+		{"FPDFText_GetLooseCharBox", &e.looseCharBox},
+		{"FPDFText_GetCharAngle", &e.charAngle},
+		{"FPDFPage_GetRotation", &e.pageRotation},
+	} {
+		_ = lib.symbol(symbol.name, symbol.fn)
 	}
 	e.initLibrary()
 	return e, nil

@@ -28,6 +28,7 @@ type (
 	document  = pdfium.Document
 	pageSize  = pdfium.PageSize
 	pageLink  = pdfium.Link
+	geometry  = pdfium.Geometry
 	textPoint = pdfium.TextPoint
 	textRange = pdfium.TextRange
 	rasterKey = render.Key
@@ -37,8 +38,6 @@ type pageFrame struct {
 	key    rasterKey
 	bitmap *ui.Bitmap
 	pixels *image.RGBA
-	chars  []pdfium.Rect
-	links  []pageLink
 }
 
 func resourceEngine(path string) (*engine, error) {

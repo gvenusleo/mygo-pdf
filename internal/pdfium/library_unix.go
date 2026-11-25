@@ -6,6 +6,8 @@ import "github.com/ebitengine/purego"
 
 type cLong = uint64
 
+func newPauseCallback(fn func(uintptr) uintptr) uintptr { return purego.NewCallback(fn) }
+
 func openLibrary(path string) (library, error) {
 	handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil {
