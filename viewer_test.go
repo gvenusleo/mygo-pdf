@@ -252,6 +252,48 @@ func TestRefreshRendersVisiblePages(t *testing.T) {
 	assertVisibleFrames(t, v, first, last)
 }
 
+func TestRefreshWaitsForParentLayout(t *testing.T) {
+	updates := make(chan func(), 12)
+	v := newViewer(func(fn func()) { updates <- fn }, testEngine(t))
+	t.Cleanup(func() { v.Close(); <-v.Done() })
+	expanded := false
+	view := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Children(func() {
+			if !expanded {
+				ui.Box(c).Height(520).Shrink(0)
+			}
+			v.View(c.Key("pdf"), expanded)
+		})
+	}, 500, 700)
+	view.Frame()
+	data := bytes.ReplaceAll(samplePDF(4), []byte("[0 0 300 430]"), []byte("[0 0 500 280]"))
+	old := v.LoadBytes(t.Context(), data, OpenDocument)
+	await(t, updates, view, func() bool { return v.document == old && len(v.wanted) == 0 })
+	changed := bytes.ReplaceAll(data, []byte("1 0 0 rg"), []byte("0 1 0 rg"))
+	id := v.LoadBytes(t.Context(), changed, RefreshDocument)
+	select {
+	case apply := <-updates:
+		expanded = true
+		apply()
+		view.Frame()
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh result did not arrive")
+	}
+	first, last := v.visiblePages()
+	if last <= first {
+		t.Fatal("the expanded viewport must show multiple pages")
+	}
+	if v.document != old {
+		t.Error("the new document replaced the old one before the expanded viewport was rendered")
+	}
+	await(t, updates, view, func() bool { return v.document == id })
+	assertVisibleFrames(t, v, first, last)
+	second, ok := view.Find("Page 2")
+	if !ok || view.Image().RGBAAt(int(second.X+10), int(second.Y+20)) != (color.RGBA{0, 255, 0, 255}) {
+		t.Fatal("the first frame of the new document does not show the new second page")
+	}
+}
+
 func assertVisibleFrames(t *testing.T, v *Viewer, first, last int) {
 	t.Helper()
 	for page := first; page <= last; page++ {
@@ -286,6 +328,37 @@ func TestVisiblePageRequestsSettle(t *testing.T) {
 		v.finishPage(key, &pageFrame{key: key, pixels: image.NewRGBA(image.Rectangle{Max: key.Region().Size()})}, nil)
 	}
 	t.Fatal("visible pages kept rerendering")
+}
+
+func TestMissingVisibleBitmapsTakePriorityOverTiles(t *testing.T) {
+	v := &Viewer{
+		worker: &worker{wake: make(chan struct{}, 1)}, document: 1,
+		width: 1800, height: 1000, gap: 12, zoom: 2, scale: 2,
+		cache: make(map[int]cachedPage), tiles: make(map[rasterKey]cachedPage),
+		pages: []pageSize{
+			{Width: 600, Height: 100}, {Width: 600, Height: 100},
+			{Width: 600, Height: 100}, {Width: 600, Height: 100},
+		},
+	}
+	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.scroll.Y = v.layout.pages[1].Y
+	first, last := v.visiblePages()
+	v.requestVisible(first, last)
+	visible := last - first + 1
+	if visible < 2 || len(v.tileKeys) == 0 || len(v.wanted) <= visible {
+		t.Fatal("expected several visible bitmaps and visible tiles")
+	}
+	for i, key := range v.wanted[:visible] {
+		if key.Page != first+i || !key.Tile.Empty() {
+			t.Fatalf("request %d = %+v, want the missing bitmap for visible page %d", i, key, first+i+1)
+		}
+	}
+	if v.wanted[visible].Tile.Empty() {
+		t.Fatal("expected visible tiles immediately after the missing bitmaps")
+	}
+	if key := v.wanted[len(v.wanted)-1]; key.Page != last+1 || !key.Tile.Empty() {
+		t.Fatalf("last request = %+v, want a prefetch for page %d", key, last+2)
+	}
 }
 
 func checkSupersededLoad(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func()) {

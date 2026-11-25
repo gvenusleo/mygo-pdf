@@ -4,7 +4,7 @@
 
 MyGo PDF 是面向 [MyGo](https://github.com/egoist/mygo) 桌面应用的第三方 PDF 预览组件。支持连续分页、围绕指针缩放、可见区高清渲染、选字复制和链接跳转。同一份文档刷新时，保留阅读位置和旧画面，直到新文档的可见页准备好。
 
-组件通过 purego 调用 PDFium。构建支持 macOS、Windows 和 glibc Linux 的 amd64 与 arm64。
+组件通过 purego 调用 PDFium。构建支持 macOS 13 或更新版本、Windows 和 glibc Linux，均支持 amd64 与 arm64。
 
 ## 运行示例
 
@@ -19,7 +19,7 @@ mise run dev
 
 在窗口主线程调用 `pdf.NewViewer(window, pdf.Options{})`。在窗口的 `ui.View` 中调用 `viewer.View(c.Key("pdf"), layoutKey)`。如果父布局固定，`layoutKey` 可传 `nil`。如果父布局会变化，传入一个随布局更新的可比较值。
 
-用 `LoadBytes(ctx, data, pdf.OpenDocument)` 打开新文档。更新同一份文档且需要保留阅读位置时，使用 `pdf.RefreshDocument`。传入的字节由查看器持有，调用方随后不得修改。读取文件应在后台进行，回到主线程确认结果仍对应当前请求后再调用 `LoadBytes`。
+用 `LoadBytes(ctx, data, pdf.OpenDocument)` 打开新文档。更新同一份文档且需要保留阅读位置时，使用 `pdf.RefreshDocument`。如果宿主暂时隐藏已经显示过的查看器，刷新会等到视图重新出现或请求被取消。传入的字节由查看器持有，调用方随后不得修改。读取文件应在后台进行，回到主线程确认结果仍对应当前请求后再调用 `LoadBytes`。
 
 通过 `State` 和 `OnChange` 获取加载状态、可见区渲染状态、错误、页码和缩放倍率。宿主可用 `GoToPage`、`SetZoom` 和 `SetFit` 组装自己的工具栏。`Options.OnLink` 处理经校验的外部链接。`Options.OpenExternal` 添加系统打开入口，宿主可用 `Options.CanOpenExternal` 控制哪些文档显示此入口。`ChineseLabels()` 提供简体中文菜单。关闭窗口时查看器会自动停止。需要提前移除时，在主线程调用 `Close`，在 UI 线程之外等待 `Done`。
 

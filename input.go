@@ -138,7 +138,7 @@ func (v *Viewer) openLink(link pageLink) {
 	if link.Page >= 0 && link.Page < len(v.pages) {
 		page := v.layout.pages[link.Page]
 		v.scroll.X = max(0, min(page.X+link.Target.X*page.W, v.layout.width-v.width))
-		v.scroll.Y = max(0, min(page.Y+link.Target.Y*page.H, v.layout.height-v.height))
+		v.navigateTo(link.Page+1, page.Y+link.Target.Y*page.H)
 	}
 }
 

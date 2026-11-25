@@ -36,6 +36,8 @@ const (
 )
 
 // State is a snapshot of the viewer. Page is one-based, or zero when empty.
+// It reports the explicitly selected page until the vertical scroll offset changes,
+// then follows the viewport center.
 type State struct {
 	RequestGeneration   uint64
 	DisplayedGeneration uint64
@@ -95,6 +97,7 @@ func NewViewer(win *mygo.Window, options Options) *Viewer {
 }
 
 // LoadBytes schedules a PDF. The caller hands over an immutable byte slice.
+// Refreshing a previously measured document waits for the viewer's current layout.
 // Zero means the request was already canceled or the viewer was closed.
 func (v *Viewer) LoadBytes(ctx context.Context, data []byte, mode LoadMode) uint64 {
 	if v.closed || ctx.Err() != nil {
@@ -123,6 +126,7 @@ func (v *Viewer) LoadBytes(ctx context.Context, data []byte, mode LoadMode) uint
 }
 
 func (v *Viewer) stopLoad() {
+	v.resolveRefresh(false)
 	if v.cancelLoad != nil {
 		v.stopCancellation()
 		v.cancelLoad()
@@ -203,12 +207,13 @@ func (v *Viewer) notify() {
 	})
 }
 
-// GoToPage scrolls to the top of a one-based page. It returns false for an invalid page.
+// GoToPage selects a one-based page and scrolls toward its top as far as the layout permits.
+// It returns false for an invalid page.
 func (v *Viewer) GoToPage(page int) bool {
 	if page < 1 || page > len(v.pages) {
 		return false
 	}
-	v.scroll.Y = min(v.layout.offset(readingPosition{page: page - 1}), max(0, v.layout.height-v.height))
+	v.navigateTo(page, v.layout.offset(readingPosition{page: page - 1}))
 	v.redraw()
 	return true
 }
@@ -243,6 +248,9 @@ func (v *Viewer) redraw() {
 }
 
 func (v *Viewer) currentPage() int {
+	if page := v.selectedPage(); page > 0 {
+		return page - 1
+	}
 	y := v.scroll.Y + v.height/2
 	page := v.layout.firstPage(y)
 	if page > 0 && y < v.layout.pages[page].Y {

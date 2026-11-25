@@ -34,6 +34,7 @@ type Viewer struct {
 	closed             bool
 	loadID             uint64
 	cancelLoad         context.CancelFunc
+	pendingRefresh     func(bool)
 	document           uint64
 	docContext         context.Context
 	cancelDoc          context.CancelFunc
@@ -47,6 +48,7 @@ type Viewer struct {
 	scale              float64
 
 	scroll        ui.ScrollState
+	navigation    pageNavigation
 	layout        pageLayout
 	width         float32
 	height        float32
@@ -98,10 +100,21 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 	if v.cancelDoc != nil {
 		v.cancelDoc()
 	}
+	page := v.selectedPage()
+	if v.document == 0 {
+		page = 1
+	}
 	v.docContext, v.cancelDoc = context.WithCancel(context.Background())
 	v.document, v.pages = doc.ID, doc.Pages
 	v.hasSelection, v.pointer = false, pointerDrag{}
 	v.layout, v.scroll.Y = plan.layout, plan.y
+	v.navigation = pageNavigation{}
+	if page = min(page, len(v.pages)); page > 0 {
+		first, last := v.visiblePages()
+		if page-1 >= first && page-1 <= last {
+			v.navigation = pageNavigation{page: page, y: v.scroll.Y}
+		}
+	}
 	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
 	v.setWanted(nil)
 	v.clearTiles()
@@ -138,6 +151,7 @@ func (v *Viewer) clearDocument() {
 	}
 	v.document, v.pages, v.wanted = 0, nil, nil
 	v.layout, v.zoom = pageLayout{}, 1
+	v.navigation = pageNavigation{}
 	v.scroll.X, v.scroll.Y = 0, 0
 	v.hasSelection, v.pointer = false, pointerDrag{}
 	clear(v.cache)

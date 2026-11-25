@@ -196,26 +196,57 @@ type loadReply struct {
 }
 
 func (v *Viewer) publishLoad(job *loadJob, doc *document, plan loadPlan, frames []*pageFrame, err error) loadReply {
-	var reply loadReply
-	if !v.deliver(func() bool {
-		if job.id != v.loadID || job.ctx.Err() != nil {
-			return false
+	reply := make(chan loadReply, 1)
+	v.publish(func() {
+		if !v.currentLoad(job) {
+			reply <- loadReply{}
+			return
 		}
-		// Recheck the viewport before committing. Clamp scroll first if the document shrank.
-		if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
-			next := viewport.plan(doc)
-			if !slices.Equal(next.keys, plan.keys) {
-				reply.next = &next
-				return true
+		if err == nil && v.document != 0 && v.measured {
+			// Window.Update runs before the view can observe changes to its parent geometry.
+			v.pendingRefresh = func(commit bool) {
+				if commit {
+					reply <- v.applyLoad(job, doc, plan, frames, err)
+				} else {
+					reply <- loadReply{}
+				}
 			}
-			plan = next
+			return
 		}
-		reply.installed = v.finishLoad(doc, plan, frames, err)
-		return true
-	}) {
+		reply <- v.applyLoad(job, doc, plan, frames, err)
+	})
+	select {
+	case result := <-reply:
+		return result
+	case <-v.worker.stop:
 		return loadReply{}
 	}
-	return reply
+}
+
+func (v *Viewer) currentLoad(job *loadJob) bool {
+	return !v.closed && job.id == v.loadID && job.ctx.Err() == nil
+}
+
+func (v *Viewer) resolveRefresh(commit bool) {
+	if pending := v.pendingRefresh; pending != nil {
+		v.pendingRefresh = nil
+		pending(commit)
+	}
+}
+
+func (v *Viewer) applyLoad(job *loadJob, doc *document, plan loadPlan, frames []*pageFrame, err error) loadReply {
+	if !v.currentLoad(job) {
+		return loadReply{}
+	}
+	// Clamp scroll before checking which bitmaps cover the current viewport.
+	if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
+		next := viewport.plan(doc)
+		if !slices.Equal(next.keys, plan.keys) {
+			return loadReply{next: &next}
+		}
+		plan = next
+	}
+	return loadReply{installed: v.finishLoad(doc, plan, frames, err)}
 }
 
 func (w *worker) openDocument(e *engine, job *loadJob) (*document, *engine, error) {

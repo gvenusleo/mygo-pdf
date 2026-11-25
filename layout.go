@@ -20,6 +20,24 @@ type readingPosition struct {
 	fraction float32
 }
 
+// A page can be selected even when the viewport cannot scroll far enough to center it.
+type pageNavigation struct {
+	page int
+	y    float32
+}
+
+func (v *Viewer) navigateTo(page int, y float32) {
+	v.scroll.Y = max(0, min(y, v.layout.height-v.height))
+	v.navigation = pageNavigation{page: page, y: v.scroll.Y}
+}
+
+func (v *Viewer) selectedPage() int {
+	if v.scroll.Y == v.navigation.y {
+		return v.navigation.page
+	}
+	return 0
+}
+
 func newFittedLayout(sizes []pageSize, vp loadViewport) pageLayout {
 	viewport, zoom, gap := vp.width, vp.zoom, vp.gap
 	var widest, tallest float32
@@ -148,19 +166,25 @@ func (v *Viewer) requestVisible(first, last int) {
 		fullBytes += size.X*size.Y*4 + render.PageMetadata
 	}
 	tileAll := fullBytes > visibleBudget
-	requests := v.requestTiles(first, last, tileAll)
+	var requests, refinements []rasterKey
 	for i := first; i <= last; i++ {
 		key := v.layout.raster(v.document, i, v.scale)
+		entry := v.cache[i]
 		if tileAll || v.needsTiles(i, key) {
-			entry := v.cache[i]
 			if entry.frame != nil && entry.frame.key.Document == v.document && entry.frame.frameBytes() <= pageBudget {
 				v.recency.MoveToFront(entry.recency)
 				continue
 			}
 			key = v.layout.fallback(v.document, i, v.zoom, pageBudget)
 		}
-		requests = v.requestPage(requests, key)
+		if entry.frame == nil {
+			requests = v.requestPage(requests, key)
+		} else {
+			refinements = v.requestPage(refinements, key)
+		}
 	}
+	requests = append(requests, v.requestTiles(first, last, tileAll)...)
+	requests = append(requests, refinements...)
 	if next := last + 1; next < len(v.pages) && v.cache[next].frame == nil {
 		requests = v.requestPage(requests, v.layout.preview(v.document, next, v.zoom))
 	}

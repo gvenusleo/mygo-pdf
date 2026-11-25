@@ -4,7 +4,7 @@
 
 A native PDF viewer for [MyGo](https://github.com/egoist/mygo) desktop apps. It displays continuous pages, zooms around the pointer, renders visible detail at high DPI and supports text selection, copy and links. Refresh a document in place to preserve the reading position while the new visible pages render.
 
-The viewer uses PDFium via purego. Supported build targets are macOS, Windows and glibc Linux on amd64 and arm64. This is a third-party MyGo component.
+The viewer uses PDFium via purego. Supported build targets are macOS 13 or later, Windows and glibc Linux on amd64 and arm64. This is a third-party MyGo component.
 
 ## Run the example
 
@@ -19,7 +19,7 @@ The sample PDF is bundled. Use the toolbar to open a local PDF, change page or f
 
 Create `pdf.NewViewer(window, pdf.Options{})` on the UI thread. Call `viewer.View(c.Key("pdf"), layoutKey)` from the window's `ui.View`. Use `nil` for the layout key when the parent layout is fixed. Supply a comparable value that changes when the parent rearranges the viewer.
 
-Call `LoadBytes(ctx, data, pdf.OpenDocument)` with an immutable byte slice to display a new document. Use `pdf.RefreshDocument` when updating the same document and retaining the reading position. If you read a file, do that in the background and call `LoadBytes` on the UI thread after checking that the result still belongs to the current request.
+Call `LoadBytes(ctx, data, pdf.OpenDocument)` with an immutable byte slice to display a new document. Use `pdf.RefreshDocument` when updating the same document and retaining the reading position. If the host temporarily hides a previously displayed viewer, the refresh waits for the view to return or for cancellation. If you read a file, do that in the background and call `LoadBytes` on the UI thread after checking that the result still belongs to the current request.
 
 `State` and `OnChange` report loading, visible rendering, errors, page number and zoom. `GoToPage`, `SetZoom` and `SetFit` let the host supply its own controls. Use `Options.OnLink` to handle validated external URLs and `Options.OpenExternal` to offer a fallback action. `Options.CanOpenExternal` lets the host show that action for selected documents. `ChineseLabels()` supplies Simplified Chinese menu labels. Window closure stops the viewer. When removing it earlier, call `Close` on the UI thread and use `Done` to wait for disposal from outside that thread.
 

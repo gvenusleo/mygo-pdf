@@ -24,6 +24,12 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 		// MyGo builds before layout. Measure again after the first frame or a size change.
 		c.AnimationFrame()
 	}
+	if !layoutChanged && !unmeasured {
+		v.resolveRefresh(true)
+	}
+	if v.selectedPage() == 0 {
+		v.navigation = pageNavigation{}
+	}
 	if len(v.pages) == 0 {
 		return
 	}
