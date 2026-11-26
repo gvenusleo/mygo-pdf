@@ -35,7 +35,7 @@ The plugin manifest pins a published PDFium asset release. MyGo PDF versions can
 
 ## Verification
 
-`mise run ci` checks Go formatting, Go and MyGo vet, race tests and builds/tests with cgo disabled. The task prepares a verified native PDFium library before running the integration tests. Pushing a `v*` tag triggers the [Release workflow](.github/workflows/release.yml). It runs PDFium integration tests on all six targets, verifies the referenced assets and publishes the GitHub Release after both checks pass. Use `mise run build` for the desktop example package.
+`mise run ci` checks Go formatting, Go and MyGo vet, race tests and builds/tests with cgo disabled. The task prepares a verified native PDFium library before running the integration tests. Before tagging a release, start the [Release workflow](.github/workflows/release.yml) manually to run native PDFium tests on all six targets and verify the referenced assets. Pushing a matching `v*` tag publishes the GitHub Release after the workflow confirms that the tagged commit passed verification. Use `mise run build` for the desktop example package.
 
 See the [design](docs/design.md) for component contracts and the [development plan](docs/plan.md) for milestones and release criteria.
 

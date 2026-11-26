@@ -36,8 +36,9 @@ The viewer uses continuous pagination, viewport tiles, and atomic document refre
 ## Release procedure
 
 1. Set `mygo.json` to the next MyGo PDF version. The plugin manifest can keep using its current PDFium asset release when the binaries and license notices are unchanged. The assets published with `v0.1.1` are the initial shared set.
-2. Run `mise run ci` before tagging. Commit the release changes and push the release commit, then create and push its matching `v*` tag. Go users can fetch a public tag as soon as it is pushed.
-3. The [Release workflow](../.github/workflows/release.yml) checks the tag against `mygo.json`, verifies that the published PDFium assets match the pinned inputs, and runs native integration tests on all six targets. Once both jobs pass, it creates the GitHub Release with generated notes. Rerun a failed workflow for a transient service or download failure. If the tagged source needs a correction, release it under a new patch version.
+2. Run `mise run ci`, then commit and push the release commit. Start the [Release workflow](../.github/workflows/release.yml) manually from Actions or with `gh workflow run release.yml --ref main`. It runs native PDFium integration tests on all six targets and checks the assets referenced by the manifest against the pinned inputs.
+3. Wait for the workflow to succeed and confirm that it ran on the exact commit you intend to tag. Create and push the matching `v*` tag for that commit. Go users can fetch a public tag as soon as it is pushed.
+4. On a tag push, the workflow checks the tag against `mygo.json` and looks for a successful manual run on the tagged commit before creating the GitHub Release. Rerun a failed verification for a transient service or download failure. If the untagged commit needs a correction, verify the new commit before tagging it. If the tagged source needs a correction, release it under a new patch version.
 
 When changing PDFium, update the pinned upstream version and SHA-256 values in `cmd/pdfium-resources`. When either the binaries or their license notices change, use a new asset tag such as `pdfium-8179-r2` for a revision of the `8179` assets:
 

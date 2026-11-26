@@ -35,7 +35,7 @@ mise run dev
 
 ## 验证
 
-`mise run ci` 执行格式和静态检查、真实 PDFium 竞态测试及无 cgo 测试。推送 `v*` 标签会触发 [Release 工作流](.github/workflows/release.yml)。工作流在六个目标上运行 PDFium 集成测试，校验清单引用的资产，两项检查都通过后自动发布 GitHub Release。用 `mise run build` 构建桌面示例安装包。
+`mise run ci` 执行格式和静态检查、真实 PDFium 竞态测试及无 cgo 测试。发版打标签前，手动运行 [Release 工作流](.github/workflows/release.yml)，在六个目标上执行 PDFium 集成测试并校验清单引用的资产。推送匹配的 `v*` 标签后，工作流确认标签指向的提交已通过验证，再发布 GitHub Release。用 `mise run build` 构建桌面示例安装包。
 
 组件契约见 [设计文档](docs/design.md)，版本安排和验收标准见 [开发计划](docs/plan.md)。
 
