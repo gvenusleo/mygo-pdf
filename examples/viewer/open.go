@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/egoist/mygo/ui"
@@ -42,7 +43,8 @@ func (d *demo) openPath(path, password string) {
 			if ctx.Err() != nil || d.readID != id || claimed.Swap(true) {
 				return
 			}
-			_, released := d.viewer.LoadReaderAt(ctx, file, info.Size(), pdf.LoadOptions{Password: password})
+			generation, released := d.viewer.LoadReaderAt(ctx, file, info.Size(), pdf.LoadOptions{Password: password})
+			d.openGeneration, d.openName = generation, filepath.Base(path)
 			lease <- released
 		})
 		select {
@@ -60,15 +62,15 @@ func (d *demo) openPath(path, password string) {
 
 func (d *demo) loadStatus(c *ui.Context) {
 	if d.readErr != nil {
-		ui.Text(c, d.readErr.Error()).TextColor(c.Theme().Danger).Wrap()
+		ui.Text(c.Key("open error"), d.readErr.Error()).Padding(6, chromeInset).TextColor(c.Theme().Danger).Wrap()
 		return
 	}
-	if d.path != "" && !d.preview && !d.status.Loading && errors.Is(d.status.Err, pdf.ErrPassword) {
-		ui.Row(c.Key("password")).Gap(c.Theme().Space(2)).Padding(c.Theme().Space(2)).Children(func() {
+	if d.path != "" && !d.status.Loading && errors.Is(d.status.Err, pdf.ErrPassword) {
+		ui.Row(c.Key("password")).AlignItems(ui.Center).Gap(6).Padding(6, chromeInset).Children(func() {
 			retry := func() { d.openPath(d.path, d.password) }
-			ui.TextInput(c, &d.password).Password().Label("PDF password").Placeholder("PDF password").OnSubmit(retry)
-			ui.Button(c, "Unlock").OnClick(retry)
-			ui.Button(c, "Cancel").OnClick(func() {
+			ui.TextInput(c.Key("password field"), &d.password).Password().Label("PDF password").Placeholder("PDF password").Height(controlSize).OnSubmit(retry)
+			ui.PrimaryButton(c.Key("unlock"), "Unlock").Height(controlSize).PaddingX(10).OnClick(retry)
+			ui.Button(c.Key("cancel"), "Cancel").Height(controlSize).PaddingX(10).OnClick(func() {
 				if d.openCancel != nil {
 					d.openCancel()
 					d.openCancel = nil
@@ -78,8 +80,8 @@ func (d *demo) loadStatus(c *ui.Context) {
 			})
 		})
 	} else if d.status.Loading {
-		ui.Text(c, "Opening PDF…")
+		ui.Text(c.Key("opening"), "Opening PDF…").Padding(6, chromeInset).TextColor(c.Theme().TextMuted)
 	} else if d.status.Err != nil {
-		ui.Text(c, d.status.Err.Error()).TextColor(c.Theme().Danger).Wrap()
+		ui.Text(c.Key("load error"), d.status.Err.Error()).Padding(6, chromeInset).TextColor(c.Theme().Danger).Wrap()
 	}
 }

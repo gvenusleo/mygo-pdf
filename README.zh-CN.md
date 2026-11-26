@@ -2,42 +2,55 @@
 
 [English](README.md)
 
-MyGo PDF 是面向 [MyGo](https://github.com/egoist/mygo) 桌面应用的第三方 PDF 预览组件。支持连续分页、围绕指针缩放、可见区高清渲染、选字复制和链接跳转。同一份文档刷新时，保留阅读位置和旧画面，直到新文档的可见页准备好。
+MyGo PDF 是可嵌入 [MyGo](https://github.com/egoist/mygo) 桌面应用的原生只读 PDF 查看器。可以用它预览应用生成的 PDF，也可以搭配自己的工具栏做成阅读器。刷新同一份文档时，查看器会保留阅读位置，等新页面渲染完成再更新画面。
 
-组件通过 purego 调用 PDFium。构建支持 macOS 13 或更新版本、Windows 和 glibc Linux，均支持 amd64 与 arm64。
+![MyGo PDF 在 macOS 上显示内置样例、工具栏和目录](docs/images/viewer.png)
+
+- 连续滚动、围绕指针缩放、页面适配和高 DPI 渲染。
+- 页码跳转、书签、文本搜索、旋转、选字复制和链接。
+- 支持内存中的 PDF 和本地文件，可重试密码，并按文档权限提供无障碍内容。
 
 ## 运行示例
 
+安装 [mise](https://mise.jdx.dev/) 后，克隆仓库并运行示例。
+
 ```sh
+git clone https://github.com/gvenusleo/mygo-pdf.git
+cd mygo-pdf
 mise trust
 mise run dev
 ```
 
-示例自带一份 PDF。工具栏可打开本地文件、按页码或目录跳转、双向搜索、缩放、切换适配模式和旋转。按 `Cmd` 或 `Ctrl` 加 `P` 切换工具栏。查看器可独立嵌入，也可搭配宿主自己的控件。需要重新生成样例 PDF 时，运行 `typst compile examples/viewer/sample.typ examples/viewer/sample.pdf`。
+[示例应用](examples/viewer)启动时会打开内置的两页 PDF。点击 **Open PDF** 可以试读本地文件。在 **View** 菜单中选择 **Hide toolbar**，可以查看单独嵌入时的效果。macOS 上按 `Cmd`+`P`，Windows 和 Linux 上按 `Ctrl`+`P` 可恢复工具栏。
 
-## 接入 MyGo 应用
+## 嵌入 MyGo 应用
 
-导入 `github.com/gvenusleo/mygo-pdf/pdf`。在窗口主线程调用 `pdf.NewViewer(window, pdf.Options{})`。在窗口的 `ui.View` 中调用 `viewer.View(c.Key("pdf"), layoutKey)`。如果父布局固定，`layoutKey` 可传 `nil`。如果父布局会变化，传入一个随布局更新的可比较值。
+在 MyGo 应用中导入 `github.com/gvenusleo/mygo-pdf/pdf`。在窗口的 UI 线程创建查看器并传入 PDF 字节，再在窗口的内容回调中调用 `View`。
 
-用 `LoadBytes(ctx, data, pdf.OpenDocument)` 打开新文档。更新同一份文档且需要保留阅读位置时，使用 `pdf.RefreshDocument`。如果宿主暂时隐藏已经显示过的查看器，刷新会等到视图重新出现或请求被取消。传入的字节由查看器持有，调用方随后不得修改。读取文件应在后台进行，回到主线程确认结果仍对应当前请求后再调用 `LoadBytes`。
+```go
+viewer := pdf.NewViewer(window, pdf.Options{})
+viewer.LoadBytes(ctx, data, pdf.OpenDocument)
 
-对于内容稳定的本地文件，在后台打开文件并取得文件大小，再在 UI 线程调用 `LoadReaderAt(ctx, file, size, pdf.LoadOptions{})`。在后台等待返回的释放通道关闭后，再关闭文件。加载完成后，文件仍须保持可读且内容稳定。对于原地重写的文件，提供不可变字节或稳定的文件快照。两个入口均限制单份文档最多 256 MiB 和 100,000 页。
+// In the window's ui.View callback:
+viewer.View(c.Key("pdf"), nil)
+```
 
-如果 `State.Err` 报告 `ErrPassword`，宿主可以提示用户输入密码，再用 `LoadOptions.Password` 重试。字节输入用 `LoadBytesWithOptions`，文件输入则每次重新打开读取源。每次重试都是新的加载请求，密码由宿主管理。
+用 `mygo dev` 运行宿主应用，或用 `mygo build` 打包，MyGo 会一并准备 PDFium 和许可证声明。[接入指南](docs/zh-CN/usage.md)说明如何给现有应用添加依赖、嵌入查看器、关闭文件、刷新和重试密码。
 
-通过 `State` 和 `OnChange` 获取加载状态、可见区渲染状态、错误、页码、缩放倍率、旋转角度和搜索状态。宿主可用 `GoToPage`、`SetZoom`、`SetFit` 和 `SetRotation` 组装工具栏，用 `ReadOutline` 和 `GoToOutline` 浏览文档内书签，用 `Find` 和 `ClearFind` 进行可取消的查找。可见页通过 MyGo 无障碍接口公开页码、权限允许的文本和键盘链接。`Options.OnLink` 处理经校验的外部链接。`Options.OpenExternal` 添加系统打开入口，宿主可用 `Options.CanOpenExternal` 控制哪些文档显示此入口。`ChineseLabels()` 提供简体中文菜单。关闭窗口时查看器会自动停止。需要提前移除时，在主线程调用 `Close`，在 UI 线程之外等待 `Done`。
+## 环境要求
 
-### 准备 PDFium 资源
+| 项目 | 要求 |
+| --- | --- |
+| 工具链 | 需要 Go 和 MyGo，项目要求见 [`go.mod`](go.mod)。 |
+| 桌面平台 | macOS 13 或更高版本、Windows 和使用 glibc 的 Linux |
+| 架构 | 各平台均支持 amd64 和 arm64 |
 
-使用 MyGo `v0.10.0` 或更高版本时，宿主直接运行 `mygo dev` 或 `mygo build`。MyGo 读取插件清单，按目标下载动态库和许可证，校验 SHA-256 后随应用打包。查看器运行时加载包内的库。直接使用 `go run` 或自定义打包时，可通过 `Options.LibraryPath` 指定动态库的绝对路径。
+## 文档与反馈
 
-插件清单固定了已发布的 PDFium 资产版本。多个 MyGo PDF 版本可以共用同一批动态库和许可证。更新资产时，参见[发布流程](docs/plan.md#release-procedure)。
-
-## 验证
-
-`mise run ci` 执行格式和静态检查、真实 PDFium 竞态测试及无 cgo 测试。发版打标签前，手动运行 [Release 工作流](.github/workflows/release.yml)，在六个目标上执行 PDFium 集成测试并校验清单引用的资产。推送匹配的 `v*` 标签后，工作流确认标签指向的提交已通过验证，再发布 GitHub Release。用 `mise run build` 构建桌面示例安装包。
-
-组件契约见 [设计文档](docs/design.md)，版本安排和验收标准见 [开发计划](docs/plan.md)。
+- [接入指南](docs/zh-CN/usage.md)介绍嵌入和打包方式。
+- [开发指南](docs/zh-CN/development.md)介绍测试、贡献和发布流程。
+- [设计文档](docs/zh-CN/design.md)、[性能实测](docs/zh-CN/performance.md)和[路线图](docs/zh-CN/plan.md)。
+- 在 [GitHub Issues](https://github.com/gvenusleo/mygo-pdf/issues) 报告问题或提出功能建议。
 
 ## 许可
 

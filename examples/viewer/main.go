@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
-	"fmt"
 	"log"
-	"strconv"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -27,8 +25,12 @@ type demo struct {
 	path                 string
 	password             string
 	openCancel           context.CancelFunc
+	openGeneration       uint64
+	openName             string
+	displayedName        string
 	pageEntry, findQuery string
-	pageField            ui.Handle
+	pageField, findField ui.Handle
+	showFind             bool
 	showOutline          bool
 	outlineID            uint64
 	outline              pdf.OutlineResult
@@ -39,7 +41,7 @@ type demo struct {
 }
 
 func main() {
-	d := new(demo)
+	d := &demo{showOutline: true}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	mygo.App.WhenReady(d.start)
 	err := mygo.App.Run()
@@ -53,10 +55,14 @@ func main() {
 }
 
 func (d *demo) start() {
-	d.window = mygo.NewWindow(mygo.WindowOptions{Title: "MyGo PDF", Width: 960, Height: 760, Content: ui.View(d.view)})
+	d.window = mygo.NewWindow(mygo.WindowOptions{
+		Title: "MyGo PDF", Width: 1040, Height: 760, MinWidth: 720, MinHeight: 460,
+		Content: ui.View(d.view),
+	})
 	d.viewer = pdf.NewViewer(d.window, pdf.Options{OnLink: func(url string) { _ = mygo.Shell.OpenExternal(url) }})
 	d.window.OnClosed(d.cancel)
 	d.viewer.OnChange(d.changed)
+	d.viewer.SetFit(pdf.FitPage)
 	d.viewer.LoadBytes(d.ctx, sample, pdf.OpenDocument)
 }
 
@@ -80,46 +86,37 @@ func (d *demo) view(c *ui.Context) {
 	}
 	c.OnShortcut(ui.Cmd, ui.KeyP, func() { d.preview = !d.preview })
 	c.OnShortcut(ui.Cmd, ui.KeyO, d.open)
+	c.OnShortcut(ui.Cmd, ui.KeyF, d.focusFind)
+	theme := readerChrome(c.Theme())
+	canvas := theme.Background.Mix(theme.Text, 0.055)
+	c.SetTheme(&theme)
 	ui.Column(c).Fill().Children(func() {
 		if !d.preview {
 			d.toolbar(c)
-			d.readingTools(c)
+			if d.showFind {
+				d.findBar(c)
+			}
+			ui.Divider(c)
 		}
 		d.loadStatus(c)
-		ui.Row(c.Key("split")).Grow(1).FillWidth().MinHeight(0).Children(func() {
+		ui.Row(c.Key("split")).Grow(1).FillWidth().MinHeight(0).Background(canvas).Children(func() {
 			if !d.preview && d.showOutline {
 				d.outlineView(c.Key("outline"))
+				ui.Divider(c.Key("outline divider"))
 			}
 			ui.Column(c.Key("viewer column")).Grow(1).FillHeight().MinWidth(0).MinHeight(0).Children(func() {
-				d.viewer.View(c.Key("pdf"), [2]bool{d.preview, d.showOutline})
+				d.viewer.View(c.Key("pdf"), [3]bool{d.preview, d.showOutline, d.showFind})
 			})
 		})
 	})
 }
 
-func (d *demo) toolbar(c *ui.Context) {
-	s := d.status
-	t := c.Theme()
-	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(2)).Padding(t.Space(2)).Children(func() {
-		ui.Button(c, "Open PDF").OnClick(d.open)
-		ui.Button(c, "Previous").Disabled(s.Page <= 1).OnClick(func() { d.viewer.GoToPage(s.Page - 1) })
-		if !d.pageField.Focused(c) {
-			d.pageEntry = pageLabel(s.Page)
-		}
-		entry := ui.TextInput(c.Key("page"), &d.pageEntry).Label("Page number").Width(72).Bind(&d.pageField).Disabled(s.Page == 0)
-		entry.OnSubmit(func() {
-			page, err := strconv.Atoi(d.pageEntry)
-			if err != nil || !d.viewer.GoToPage(page) {
-				d.pageEntry = pageLabel(s.Page)
-			}
-		})
-		ui.Text(c, fmt.Sprintf("/ %d", s.PageCount))
-		ui.Button(c, "Next").Disabled(s.Page >= s.PageCount).OnClick(func() { d.viewer.GoToPage(s.Page + 1) })
-		ui.Button(c, "−").Label("Zoom out").Disabled(s.Page == 0 || s.Zoom <= 0.5).OnClick(func() { d.viewer.SetZoom(s.Zoom / 1.25) })
-		ui.Button(c, "+").Label("Zoom in").Disabled(s.Page == 0 || s.Zoom >= 4).OnClick(func() { d.viewer.SetZoom(s.Zoom * 1.25) })
-		ui.Button(c, "Fit width").OnClick(func() { d.viewer.SetFit(pdf.FitWidth) })
-		ui.Button(c, "Fit page").OnClick(func() { d.viewer.SetFit(pdf.FitPage) })
-		ui.Button(c, "Rotate 90°").Disabled(s.Page == 0).OnClick(func() { d.viewer.SetRotation(s.Rotation + 1) })
-		ui.Button(c, "Hide toolbar").OnClick(func() { d.preview = true })
-	})
+func (d *demo) documentName() string {
+	if d.status.PageCount == 0 {
+		return ""
+	}
+	if d.displayedName != "" {
+		return d.displayedName
+	}
+	return "Sample.pdf"
 }

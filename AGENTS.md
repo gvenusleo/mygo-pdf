@@ -1,10 +1,10 @@
 # MyGo PDF development guidelines
 
-MyGo PDF is a read-only desktop viewer built with Go, MyGo Native UI, and PDFium. See the [design](docs/design.md) for the current contracts and the [development plan](docs/plan.md) for upcoming work.
+MyGo PDF is a read-only desktop viewer built with Go, MyGo Native UI and PDFium. See the [integration guide](docs/en/usage.md) for host APIs, [design](docs/en/design.md) for component contracts and the [roadmap](docs/en/plan.md) for upcoming work.
 
 ## Project language
 
-Write all project-authored material in English. This includes source comments, Go documentation, default UI text, command help, errors, logs, test messages, configuration comments, commit messages, pull requests, and release titles and notes. Keep the canonical documentation in English. Selected documents may have separate, locale-suffixed Chinese translations, such as `README.zh-CN.md`. Explicitly selected UI translations and test fixtures may contain text in the language they exercise.
+Write all project-authored material in English. This includes source comments, Go documentation, default UI text, command help, errors, logs, test messages, configuration comments, commit messages, pull requests, and release titles and notes. Keep English as the source for documentation. Maintain `README.zh-CN.md` alongside `README.md`, and mirror the files in `docs/en/` under `docs/zh-CN/` with the same filenames. Link both language versions near the top of each page and update the translation in the same change as its English source. Explicitly selected UI translations and test fixtures may contain text in the language they exercise.
 
 ## Principles
 
@@ -32,12 +32,6 @@ Write all project-authored material in English. This includes source comments, G
 
 Keep tests that prevent specific regressions in generation handling, cancellation, reentrancy, resource disposal, or multi-page refresh. Drive asynchronous tests with controlled results or state signals. For reproducible regressions, verify that the test fails against the old behavior. Check visual changes and input with `ui.NewTester` or real windows, and report the platforms exercised.
 
-| Command | Purpose |
-| --- | --- |
-| `mise run dev` | Start the example with live reload using the plugin manifest |
-| `mise run resources` | Prepare and verify PDFium for local integration tests |
-| `mise run ci` | Check formatting, run Go and MyGo vet, and test with PDFium, the race detector, and cgo disabled |
-| `mise run build` | Package the example and its declared PDFium assets |
-| `mise exec -- gofmt -w <file>` | Format the edited Go file |
+The [development guide](docs/en/development.md) lists the local commands. Run `mise run ci` for formatting, vet and native integration checks. Use `mise run dev` to exercise the example and `mise exec -- gofmt -w <file>` to format edited Go files. Follow the [release procedure](docs/en/development.md#release-procedure) when preparing a tag.
 
-For FFI or packaging changes, verify the affected ABI, library checksums, license notices, and installed resource paths. Keep README translations in sync with the English instructions and check document links and punctuation. Use English Conventional Commits. Commit, push, and publish only with explicit authorization.
+For FFI or packaging changes, verify the affected ABI, library checksums, license notices, and installed resource paths. Check document links and punctuation. Use English Conventional Commits. Commit, push, and publish only with explicit authorization.
