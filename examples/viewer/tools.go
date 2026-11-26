@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
-	pdf "github.com/gvenusleo/mygo-pdf"
+	"github.com/gvenusleo/mygo-pdf/pdf"
 )
 
 func pageLabel(page int) string {

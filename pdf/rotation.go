@@ -11,7 +11,7 @@ func (v *Viewer) SetRotation(quarterTurns int) {
 	}
 	anchor, selected := v.centerAnchor(), v.selectedPage()
 	v.rotation = rotation
-	v.layout = v.layout.geometry.fit(v.loadViewport())
+	v.layout = fitLayout(v.layout.Geometry, v.viewport())
 	v.restoreCenter(anchor)
 	v.navigation = pageNavigation{selected, v.scroll.Y}
 	if nav := v.pendingNavigation; nav != nil {

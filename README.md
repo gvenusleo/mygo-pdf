@@ -13,11 +13,11 @@ mise trust
 mise run dev
 ```
 
-The sample PDF is bundled. The toolbar opens local files, navigates by page or outline, finds text in either direction, changes fit and zoom, and rotates the view. Use `Cmd`/`Ctrl`+`P` to toggle the toolbar. The viewer itself works without a toolbar. The example's sample PDF can be regenerated with `typst compile testdata/sample.typ examples/viewer/sample.pdf`.
+The sample PDF is bundled. The toolbar opens local files, navigates by page or outline, finds text in either direction, changes fit and zoom, and rotates the view. Use `Cmd`/`Ctrl`+`P` to toggle the toolbar. The viewer itself works without a toolbar. The example's sample PDF can be regenerated with `typst compile examples/viewer/sample.typ examples/viewer/sample.pdf`.
 
 ## Embed in a MyGo app
 
-Create `pdf.NewViewer(window, pdf.Options{})` on the UI thread. Call `viewer.View(c.Key("pdf"), layoutKey)` from the window's `ui.View`. Use `nil` for the layout key when the parent layout is fixed. Supply a comparable value that changes when the parent rearranges the viewer.
+Import `github.com/gvenusleo/mygo-pdf/pdf`. Create `pdf.NewViewer(window, pdf.Options{})` on the UI thread. Call `viewer.View(c.Key("pdf"), layoutKey)` from the window's `ui.View`. Use `nil` for the layout key when the parent layout is fixed. Supply a comparable value that changes when the parent rearranges the viewer.
 
 Call `LoadBytes(ctx, data, pdf.OpenDocument)` with an immutable byte slice to display a new document. Use `pdf.RefreshDocument` when updating the same document and retaining the reading position. If the host temporarily hides a previously displayed viewer, the refresh waits for the view to return or for cancellation. If you read a file, do that in the background and call `LoadBytes` on the UI thread after checking that the result still belongs to the current request.
 

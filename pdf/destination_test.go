@@ -54,12 +54,12 @@ func TestInternalDestinationModes(t *testing.T) {
 		}
 		page := v.layout.page(0)
 		view.ClickAt(shown.X+(link.Bounds.X+link.Bounds.W/2)*page.W, shown.Y+(link.Bounds.Y+link.Bounds.H/2)*page.H)
-		if v.State().Page != target+1 || math.Abs(v.layout.scale-tc.scale) > 0.005 {
-			t.Errorf("link %d selected page %d at scale %.4f, want page %d at %.4f", i, v.State().Page, v.layout.scale, target+1, tc.scale)
+		if v.State().Page != target+1 || math.Abs(v.layout.Scale-tc.scale) > 0.005 {
+			t.Errorf("link %d selected page %d at scale %.4f, want page %d at %.4f", i, v.State().Page, v.layout.Scale, target+1, tc.scale)
 		}
 		if i == 0 {
 			page := v.layout.page(1)
-			x := min(v.layout.width-v.width, page.X+80*2)
+			x := min(v.layout.Width-v.width, page.X+80*2)
 			if math.Abs(float64(v.scroll.X-x)) > 1 || math.Abs(float64(v.scroll.Y-(page.Y+130*2))) > 1 {
 				t.Errorf("XYZ scroll = (%v, %v), want PDF coordinates (80, 300)", v.scroll.X, v.scroll.Y)
 			}

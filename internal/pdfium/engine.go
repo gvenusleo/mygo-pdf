@@ -8,6 +8,8 @@ import (
 
 	"errors"
 	"sync"
+
+	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
 // The ABI follows the public headers for PDFium chromium/8179.
@@ -19,7 +21,7 @@ type Engine struct {
 	closeDocument   func(uintptr)
 	pageCount       func(uintptr) int32
 	userPermissions func(uintptr) cLong
-	pageSize        func(uintptr, int32, *PageSize) int32
+	pageSize        func(uintptr, int32, *render.PageSize) int32
 	loadPage        func(uintptr, int32) uintptr
 	closePage       func(uintptr)
 	createBitmap    func(int32, int32, int32, unsafe.Pointer, int32) uintptr

@@ -14,6 +14,6 @@ for filename, permissions in (
 ):
     writer = PdfWriter(clone_from="examples/viewer/sample.pdf")
     writer.encrypt("café", "fixture-owner", permissions_flag=permissions, algorithm="RC4-128")
-    with open("testdata/" + filename, "wb") as output:
+    with open("pdf/testdata/" + filename, "wb") as output:
         writer.write(output)
 ```

@@ -13,11 +13,11 @@ mise trust
 mise run dev
 ```
 
-示例自带一份 PDF。工具栏可打开本地文件、按页码或目录跳转、双向搜索、缩放、切换适配模式和旋转。按 `Cmd` 或 `Ctrl` 加 `P` 切换工具栏。查看器可独立嵌入，也可搭配宿主自己的控件。需要重新生成样例 PDF 时，运行 `typst compile testdata/sample.typ examples/viewer/sample.pdf`。
+示例自带一份 PDF。工具栏可打开本地文件、按页码或目录跳转、双向搜索、缩放、切换适配模式和旋转。按 `Cmd` 或 `Ctrl` 加 `P` 切换工具栏。查看器可独立嵌入，也可搭配宿主自己的控件。需要重新生成样例 PDF 时，运行 `typst compile examples/viewer/sample.typ examples/viewer/sample.pdf`。
 
 ## 接入 MyGo 应用
 
-在窗口主线程调用 `pdf.NewViewer(window, pdf.Options{})`。在窗口的 `ui.View` 中调用 `viewer.View(c.Key("pdf"), layoutKey)`。如果父布局固定，`layoutKey` 可传 `nil`。如果父布局会变化，传入一个随布局更新的可比较值。
+导入 `github.com/gvenusleo/mygo-pdf/pdf`。在窗口主线程调用 `pdf.NewViewer(window, pdf.Options{})`。在窗口的 `ui.View` 中调用 `viewer.View(c.Key("pdf"), layoutKey)`。如果父布局固定，`layoutKey` 可传 `nil`。如果父布局会变化，传入一个随布局更新的可比较值。
 
 用 `LoadBytes(ctx, data, pdf.OpenDocument)` 打开新文档。更新同一份文档且需要保留阅读位置时，使用 `pdf.RefreshDocument`。如果宿主暂时隐藏已经显示过的查看器，刷新会等到视图重新出现或请求被取消。传入的字节由查看器持有，调用方随后不得修改。读取文件应在后台进行，回到主线程确认结果仍对应当前请求后再调用 `LoadBytes`。
 

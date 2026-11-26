@@ -5,6 +5,9 @@ import (
 	"io"
 	"slices"
 	"sync"
+
+	"github.com/gvenusleo/mygo-pdf/internal/layout"
+	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
 type loadJob struct {
@@ -25,10 +28,12 @@ func (job *loadJob) releaseSource() {
 }
 
 type loadViewport struct {
-	anchor                   readingPosition
-	width, height, zoom, gap float32
-	fit                      Fit
-	rotation                 int
+	anchor layout.Position
+	layout.Viewport
+}
+
+func (v *Viewer) loadViewport() loadViewport {
+	return loadViewport{anchor: v.anchor(), Viewport: v.viewport()}
 }
 
 type loadPlan struct {
@@ -39,18 +44,18 @@ type loadPlan struct {
 }
 
 func (l pageLayout) viewportOffset(vp loadViewport) float32 {
-	return max(0, min(l.offset(vp.anchor), l.height-vp.height))
+	return max(0, min(l.Offset(vp.anchor), l.Height-vp.Height))
 }
 
-func (vp loadViewport) plan(id uint64, layout pageLayout) loadPlan {
-	y := layout.viewportOffset(vp)
-	first, last := layout.visiblePages(y, vp.height)
+func (vp loadViewport) plan(id uint64, fitted pageLayout) loadPlan {
+	y := fitted.viewportOffset(vp)
+	first, last := fitted.VisiblePages(y, vp.Height)
 	keys := make([]rasterKey, last-first+1)
-	budget := visibleBudget / len(keys)
+	resolution := render.FallbackResolution(vp.Zoom, render.VisibleBitmapBudget/len(keys))
 	for i := range keys {
-		keys[i] = layout.fallback(id, first+i, vp.zoom, budget)
+		keys[i] = fitted.rasterKey(id, first+i, resolution)
 	}
-	return loadPlan{viewport: vp, layout: layout, y: y, keys: keys}
+	return loadPlan{viewport: vp, layout: fitted, y: y, keys: keys}
 }
 
 type copyJob struct {
@@ -208,7 +213,7 @@ func (w *worker) nextRaster(task *workerTask) {
 	task.ctx, w.cancelPage = context.WithCancel(context.Background())
 }
 
-func (w *worker) finishPage(key rasterKey, delivered bool) {
+func (w *worker) completeRasterTask(key rasterKey, delivered bool) {
 	w.mu.Lock()
 	w.cancelPage()
 	w.cancelPage = nil
@@ -273,7 +278,7 @@ func (v *Viewer) replaceDocument(e *engine, old *document, job *loadJob) (*engin
 	var plan loadPlan
 	var frames []*pageFrame
 	if err == nil {
-		plan, err = prepareLayout(e, job.ctx, doc, job.viewport, pageGeometry{})
+		plan, err = prepareLayout(e, job.ctx, doc, job.viewport, layout.Geometry{})
 		if err == nil {
 			frames, err = renderLoad(e, job.ctx, doc, plan.keys, nil)
 		}
@@ -286,7 +291,7 @@ func (v *Viewer) replaceDocument(e *engine, old *document, job *loadJob) (*engin
 	for {
 		reply := v.publishLoad(job, doc, plan, frames, err)
 		if reply.next != nil {
-			plan, err = prepareLayout(e, job.ctx, doc, *reply.next, plan.layout.geometry)
+			plan, err = prepareLayout(e, job.ctx, doc, *reply.next, plan.layout.Geometry)
 			if err == nil {
 				frames, err = renderLoad(e, job.ctx, doc, plan.keys, frames)
 			}
@@ -355,7 +360,7 @@ func (v *Viewer) applyLoad(job *loadJob, doc *document, plan loadPlan, frames []
 	}
 	// Clamp scroll before checking which bitmaps cover the current viewport.
 	if viewport := v.loadViewport(); err == nil && viewport != plan.viewport {
-		next := viewport.plan(doc.ID, plan.layout.geometry.fit(viewport))
+		next := viewport.plan(doc.ID, fitLayout(plan.layout.Geometry, viewport.Viewport))
 		if !slices.Equal(next.keys, plan.keys) {
 			return loadReply{next: &viewport}
 		}
@@ -412,10 +417,10 @@ func (v *Viewer) renderPage(e *engine, doc *document, key rasterKey, ctx context
 	if doc != nil && doc.ID == key.Document && ctx.Err() == nil {
 		frame, err := renderFrame(e, ctx, doc, key, background)
 		if ctx.Err() == nil {
-			delivered = v.deliver(ctx, func() bool { return v.finishPage(key, frame, err) })
+			delivered = v.deliver(ctx, func() bool { return v.applyRasterResult(key, frame, err) })
 		}
 	}
-	v.worker.finishPage(key, delivered)
+	v.worker.completeRasterTask(key, delivered)
 }
 
 func (v *Viewer) readMetadata(e *engine, doc *document, key geometryKey, ctx context.Context) {

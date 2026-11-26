@@ -6,13 +6,14 @@ MyGo PDF is a read-only PDF viewer for desktop applications. It supports continu
 
 | Location | Responsibility |
 | --- | --- |
-| [Root `pdf` package](../api.go) | Public API, UI-thread state, MyGo view and input, viewport layout, bitmap caching, and worker scheduling |
+| [`pdf`](../pdf) | Public API, UI-thread state, MyGo view and input, bitmap caching, and worker scheduling |
+| [`internal/layout`](../internal/layout) | Page size indexing, viewport geometry, and reading positions |
 | [`internal/pdfium`](../internal/pdfium) | PDFium loading, platform ABI, native handles, rasterization, and text and link extraction |
-| [`internal/render`](../internal/render) | Raster request keys, size limits, and cache budgets shared by the viewer and PDFium layers |
+| [`internal/render`](../internal/render) | Page dimensions, raster keys, whole-page resolution limits, and cache budgets |
 | [`cmd/pdfium-resources`](../cmd/pdfium-resources) | Verify upstream archives and libraries, and prepare the library and licenses for the host's build |
 | [`examples/viewer`](../examples/viewer) | Demonstrate host-side file opening, toolbar composition, and embedded preview |
 
-The root package depends on `internal/pdfium` and `internal/render`. The PDFium package uses `internal/render` and has no MyGo dependency. The host owns file opening, path authorization, monitoring, document generation, persistence, and export.
+Hosts import `github.com/gvenusleo/mygo-pdf/pdf`. Both `internal/layout` and `internal/pdfium` use `internal/render` and have no MyGo dependency. The host owns file opening, path authorization, monitoring, document generation, persistence, and export.
 
 ## Public contracts
 
@@ -34,4 +35,4 @@ Internal links support `XYZ`, `Fit`, `FitH`, `FitV`, `FitR`, `FitB`, `FitBH`, an
 
 Visible pages have a group named for their page number, up to 8 KiB of accessible text per page when permitted, and focusable links with labels and activation actions. Semantics share the visible-page geometry and metadata cache. Keyboard and assistive activation follow the same routing as pointer activation. Text extraction uses PDFium's order and permission flags.
 
-Build targets are macOS 13 or later, Windows, and glibc Linux on amd64 and arm64. `mygo-plugin.json` declares the matching PDFium library and a shared file with all license notices. MyGo fetches and verifies both assets during development and packaging, and places them at the root of the app's resource directory. At runtime the viewer loads the bundled library without network access. An absolute `LibraryPath` override supports custom packaging. Track build coverage, PDFium integration tests, native input, and installer verification separately for each platform.
+Build targets are macOS 13 or later, Windows, and glibc Linux on amd64 and arm64. `internal/pdfium/mygo-plugin.json` declares the matching PDFium library and a shared file with all license notices. MyGo fetches and verifies both assets during development and packaging, and places them at the root of the app's resource directory. At runtime the viewer loads the bundled library without network access. An absolute `LibraryPath` override supports custom packaging. Track build coverage, PDFium integration tests, native input, and installer verification separately for each platform.

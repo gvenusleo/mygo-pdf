@@ -15,8 +15,8 @@ Write all project-authored material in English. This includes source comments, G
 
 ## Packages and code
 
-- The root `pdf` package owns the viewer API, MyGo view, input, layout, cache, and worker scheduling. `internal/pdfium` owns library loading, ABI bindings, native handles, rasterization, and text extraction. `internal/render` defines raster requests and budgets and has no UI or FFI dependencies.
-- `cmd/pdfium-resources` prepares test libraries and plugin release assets. `mygo-plugin.json` declares the released libraries and license notices for host builds. `examples/viewer` demonstrates the public API. Core packages do not depend on the commands or example.
+- The public `pdf` package in `pdf/` owns the viewer API, MyGo view, input, UI-thread state, cache, and worker scheduling. `internal/layout` computes page geometry and viewport offsets without UI or FFI dependencies. `internal/pdfium` owns library loading, ABI bindings, native handles, rasterization, and text extraction. `internal/render` defines shared page dimensions, raster requests, and budgets.
+- `cmd/pdfium-resources` prepares test libraries and plugin release assets. `internal/pdfium/mygo-plugin.json` declares the released libraries and license notices alongside the package that loads them. `examples/viewer` demonstrates the public API. Core packages do not depend on the commands or example.
 - Explain constraints and reasons in comments. Organize files by responsibility and aim for functions of 60 lines or fewer.
 - Consult `use-modern-go` before editing Go and `mygo-maintenance` for MyGo UI or lifecycle changes when those skills are available. Read files before editing and keep changes scoped to the task.
 

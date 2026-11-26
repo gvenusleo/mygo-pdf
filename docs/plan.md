@@ -52,6 +52,6 @@ gh release create pdfium-8179-r2 --latest=false \
   build/pdfium-release/pdfium-notices.txt
 ```
 
-Verify that all seven files are publicly downloadable and match the generated files. Copy `build/pdfium-release/mygo-plugin.json` into the module root and include it in the next MyGo PDF release commit. Keep previously published asset releases available for hosts pinned to earlier Go module versions.
+Verify that all seven files are publicly downloadable and match the generated files. Copy `build/pdfium-release/mygo-plugin.json` to `internal/pdfium/mygo-plugin.json` and include it in the next MyGo PDF release commit. Keep previously published asset releases available for hosts pinned to earlier Go module versions.
 
 If upstream MyGo adds continuous viewports and atomic refresh, reassess rendering, API, and packaging compatibility. Contribute shared improvements upstream where possible.

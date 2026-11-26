@@ -72,8 +72,8 @@ func measureViewer(t *testing.T, data []byte, mode string) {
 			return false
 		}
 		complete = time.Since(start)
-		if g := v.layout.geometry.lazy; g != nil {
-			t.Logf("measure source probes=%d reads=%d bytes=%d", g.nodes[1].count, reader.calls.Load(), reader.total.Load())
+		if g := v.layout.Geometry; g.Incremental() {
+			t.Logf("measure source probes=%d reads=%d bytes=%d", g.Measured(), reader.calls.Load(), reader.total.Load())
 		}
 		return true
 	})

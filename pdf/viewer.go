@@ -4,21 +4,14 @@ package pdf
 import (
 	"container/list"
 	"context"
-	"slices"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/gvenusleo/mygo-pdf/internal/pdfium"
-	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
 
-type cachedPage struct {
-	frame   *pageFrame
-	failed  rasterKey
-	err     error
-	recency *list.Element
-}
-
-// Viewer holds the state of a single window's PDF viewport.
+// Viewer holds the state of a single window's PDF viewport. Create a Viewer with
+// [NewViewer]. Its zero value is unusable. Call its methods on the window's UI
+// thread, except [Viewer.Done], which can be called from any goroutine.
 type Viewer struct {
 	publish            func(func())
 	invalidate         func()
@@ -38,6 +31,7 @@ type Viewer struct {
 	cancelLoad         context.CancelFunc
 	pendingRefresh     func(bool)
 	pendingNavigation  *pendingNavigation
+	dimensionErrors    map[int]error
 	rotation           int
 	outlineID          uint64
 	cancelOutline      context.CancelFunc
@@ -107,10 +101,6 @@ func (v *Viewer) setScale(scale float64) bool {
 	return true
 }
 
-func (v *Viewer) loadViewport() loadViewport {
-	return loadViewport{anchor: v.anchor(), width: v.width, height: v.height, zoom: v.zoom, gap: v.gap, fit: v.fit, rotation: v.rotation}
-}
-
 func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, err error) bool {
 	v.stopLoad()
 	v.loadErr = err
@@ -127,7 +117,7 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 	}
 	v.docContext, v.cancelDoc = context.WithCancel(context.Background())
 	v.document, v.pages = doc.ID, doc.Pages
-	v.pendingNavigation = nil
+	v.pendingNavigation, v.dimensionErrors = nil, nil
 	v.worker.startDimensions(plan, v.docContext)
 	v.hasSelection, v.pointer = false, pointerDrag{}
 	v.layout, v.scroll.Y = plan.layout, plan.y
@@ -139,7 +129,7 @@ func (v *Viewer) finishLoad(doc *document, plan loadPlan, frames []*pageFrame, e
 		}
 	}
 	v.lastScrollY = v.scroll.Y
-	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
+	v.scroll.X = min(v.scroll.X, max(0, v.layout.Width-v.width))
 	v.setRasterDemand(nil, -1, 0, nil)
 	v.interactionErr = nil
 	v.resetMetadata()
@@ -182,7 +172,7 @@ func (v *Viewer) clearDocument() {
 	v.missingBitmaps = 0
 	v.interactionErr = nil
 	v.resetMetadata()
-	v.pendingNavigation, v.rotation = nil, 0
+	v.pendingNavigation, v.dimensionErrors, v.rotation = nil, nil, 0
 	v.layout, v.zoom = pageLayout{}, 1
 	v.navigation = pageNavigation{}
 	v.scroll.X, v.scroll.Y = 0, 0
@@ -212,86 +202,3 @@ func (v *Viewer) Close() {
 
 // Done closes when the worker has released the native document. It can be used from any goroutine.
 func (v *Viewer) Done() <-chan struct{} { return v.worker.done }
-
-func (v *Viewer) setRasterDemand(keys []rasterKey, prefetchPage, missing int, metadata []geometryKey) {
-	var prefetch rasterKey
-	if len(keys) > 0 && keys[len(keys)-1].Page == prefetchPage {
-		prefetch = keys[len(keys)-1]
-	}
-	if !slices.Equal(keys, v.wanted) || v.prefetch != prefetch ||
-		v.missingBitmaps != missing || !slices.Equal(metadata, v.metadataWanted) {
-		v.wanted, v.prefetch, v.missingBitmaps, v.metadataWanted = keys, prefetch, missing, metadata
-		v.worker.submitPages(keys, prefetch, missing, metadata)
-	}
-}
-
-func (v *Viewer) clearTiles() {
-	clear(v.tiles)
-	v.tileKeys = nil
-	v.tileBytes = 0
-}
-
-func (v *Viewer) finishPage(key rasterKey, frame *pageFrame, err error) bool {
-	if v.document != key.Document || key.Rotation != v.rotation || !slices.Contains(v.wanted, key) {
-		return false
-	}
-	if !key.Tile.Empty() {
-		entry := v.tiles[key]
-		if err == nil {
-			frame.installBitmap(entry.frame)
-			v.tiles[key] = cachedPage{frame: frame}
-			if entry.frame == nil {
-				v.tileBytes += frame.frameBytes()
-			}
-			v.trimTiles()
-		} else {
-			entry.failed, entry.err = key, err
-			v.tiles[key] = entry
-		}
-		return true
-	}
-	if err == nil {
-		v.cachePage(frame)
-		for v.cacheSize > render.BitmapBudget {
-			v.removePage(v.recency.Back().Value.(int))
-		}
-	} else {
-		entry := v.cache[key.Page]
-		entry.failed, entry.err = key, err
-		v.cache[key.Page] = entry
-	}
-	return true
-}
-
-func (v *Viewer) cachePage(frame *pageFrame) {
-	page := frame.key.Page
-	frame.installBitmap(v.cache[page].frame)
-	v.removePage(page)
-	v.cache[page] = cachedPage{frame: frame, recency: v.recency.PushFront(page)}
-	v.cacheSize += frame.frameBytes()
-}
-
-func (v *Viewer) removePage(page int) {
-	entry := v.cache[page]
-	delete(v.cache, page)
-	if entry.frame != nil {
-		v.cacheSize -= entry.frame.frameBytes()
-		v.recency.Remove(entry.recency)
-	}
-}
-
-func (f *pageFrame) installBitmap(old *pageFrame) {
-	if old != nil && old.key.Region().Size() == f.key.Region().Size() {
-		// Reuse the texture so a PDF refresh only has to upload new pixels.
-		old.bitmap.Update(f.pixels)
-		f.bitmap = old.bitmap
-	} else {
-		f.bitmap = ui.NewBitmap(f.pixels)
-	}
-	f.pixels = nil
-}
-
-func (f *pageFrame) frameBytes() int {
-	region := f.key.Region()
-	return region.Dx() * region.Dy() * 4
-}

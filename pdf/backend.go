@@ -16,17 +16,23 @@ import (
 const MaxPDFBytes = pdfium.MaxPDFBytes
 
 var (
+	// ErrUnsupported indicates an unsupported platform or a feature missing from PDFium.
 	ErrUnsupported = pdfium.ErrUnsupported
-	ErrLibrary     = pdfium.ErrLibrary
-	ErrInvalidPDF  = pdfium.ErrInvalidPDF
-	ErrPassword    = pdfium.ErrPassword
-	ErrLimit       = pdfium.ErrLimit
+	// ErrLibrary indicates that the viewer could not locate or load PDFium.
+	ErrLibrary = pdfium.ErrLibrary
+	// ErrInvalidPDF indicates that the input could not be loaded as a PDF.
+	ErrInvalidPDF = pdfium.ErrInvalidPDF
+	// ErrPassword indicates that a required password is missing or incorrect.
+	// Use [errors.Is] to detect it and retry with [LoadOptions.Password].
+	ErrPassword = pdfium.ErrPassword
+	// ErrLimit indicates that a PDF exceeds the input size or page count limit.
+	ErrLimit = pdfium.ErrLimit
 )
 
 type (
 	engine    = pdfium.Engine
 	document  = pdfium.Document
-	pageSize  = pdfium.PageSize
+	pageSize  = render.PageSize
 	pageLink  = pdfium.Link
 	geometry  = pdfium.Geometry
 	textPoint = pdfium.TextPoint

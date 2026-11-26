@@ -19,14 +19,14 @@ type dimensionQueue struct {
 func (w *worker) startDimensions(plan loadPlan, ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	g := plan.layout.geometry.lazy
+	g := plan.layout.Geometry
 	w.dimensions = nil
-	if g == nil {
+	if !g.Incremental() {
 		return
 	}
-	q := &dimensionQueue{document: plan.keys[0].Document, ctx: ctx, checked: make([]bool, len(g.sizes)), inFlight: -1, prefetch: -1}
-	for page, size := range g.sizes {
-		q.checked[page] = size.Width > 0
+	q := &dimensionQueue{document: plan.keys[0].Document, ctx: ctx, checked: make([]bool, g.Count()), inFlight: -1, prefetch: -1}
+	for page := range q.checked {
+		q.checked[page] = g.Exact(page)
 	}
 	w.dimensions = q
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/gvenusleo/mygo-pdf/internal/layout"
 	"github.com/gvenusleo/mygo-pdf/internal/pdfium"
 	"github.com/gvenusleo/mygo-pdf/internal/render"
 )
@@ -82,8 +83,8 @@ func TestPDFiumPreview(t *testing.T) {
 	}
 	checkCopy(t, v, view, updates, first, v.layout.page(0), data)
 	view.Scroll(100, 100, 0, v.layout.page(2).Y-v.scroll.Y+20)
-	if v.anchor().page != 2 {
-		t.Fatalf("continuous scrolling stopped on page %d", v.anchor().page+1)
+	if v.anchor().Page != 2 {
+		t.Fatalf("continuous scrolling stopped on page %d", v.anchor().Page+1)
 	}
 	checkRefresh(t, v, view, updates)
 	view.SetSize(600, 380)
@@ -127,10 +128,10 @@ func checkCopy(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(), 
 		t.Fatal("internal link was not found")
 	}
 	view.ClickAt(visible.X+(internal.Bounds.X+internal.Bounds.W/2)*page.W, visible.Y+(internal.Bounds.Y+internal.Bounds.H/2)*page.H)
-	if v.anchor().page != 1 {
-		t.Fatalf("internal link jumped to page %d", v.anchor().page+1)
+	if v.anchor().Page != 1 {
+		t.Fatalf("internal link jumped to page %d", v.anchor().Page+1)
 	}
-	if v.anchor().fraction < 0.2 {
+	if v.anchor().Fraction < 0.2 {
 		t.Fatal("the jump stopped at the page top instead of the destination within the page")
 	}
 }
@@ -138,7 +139,7 @@ func checkCopy(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(), 
 func checkRefresh(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func()) {
 	t.Helper()
 	v.setZoom(1.25, 0, 0)
-	v.scroll.Y = v.layout.offset(readingPosition{page: 1, fraction: 0.4})
+	v.scroll.Y = v.layout.Offset(layout.Position{Page: 1, Fraction: 0.4})
 	view.Frame()
 	before, id := v.anchor(), v.document
 	v.LoadBytes(t.Context(), samplePDF(3), RefreshDocument)
@@ -148,7 +149,7 @@ func checkRefresh(t *testing.T, v *Viewer, view *ui.Tester, updates <-chan func(
 		t.Fatal("a canceled request entered the queue")
 	}
 	await(t, updates, view, func() bool { return v.document != id })
-	if after := v.anchor(); after.page != before.page || after.fraction < 0.39 || after.fraction > 0.41 || v.zoom != 1.25 {
+	if after := v.anchor(); after.Page != before.Page || after.Fraction < 0.39 || after.Fraction > 0.41 || v.zoom != 1.25 {
 		t.Fatalf("refresh lost the reading position: before %+v, after %+v, zoom %v", before, after, v.zoom)
 	}
 	id = v.document
@@ -269,7 +270,7 @@ func TestRefreshRendersVisiblePages(t *testing.T) {
 
 	v.scroll.Y = v.layout.page(4).Y
 	view.Frame()
-	if v.anchor().page < 2 {
+	if v.anchor().Page < 2 {
 		t.Fatal("the test viewport did not reach the pages about to be removed")
 	}
 	load(samplePDF(2))
@@ -339,7 +340,7 @@ func TestVisiblePageRequestsSettle(t *testing.T) {
 	for i := range v.pages {
 		v.pages[i] = pageSize{Width: 3800, Height: 180}
 	}
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = fitLayout(layout.NewGeometry(v.pages), v.viewport())
 	first, last := v.visiblePages()
 	for range 60 {
 		v.requestVisible(first, last)
@@ -350,7 +351,7 @@ func TestVisiblePageRequestsSettle(t *testing.T) {
 			return
 		}
 		key := v.wanted[0]
-		v.finishPage(key, &pageFrame{key: key, pixels: image.NewRGBA(image.Rectangle{Max: key.Region().Size()})}, nil)
+		v.applyRasterResult(key, &pageFrame{key: key, pixels: image.NewRGBA(image.Rectangle{Max: key.Region().Size()})}, nil)
 	}
 	t.Fatal("visible pages kept rerendering")
 }
@@ -365,7 +366,7 @@ func TestMissingVisibleBitmapsTakePriorityOverTiles(t *testing.T) {
 			{Width: 600, Height: 100}, {Width: 600, Height: 100},
 		},
 	}
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = fitLayout(layout.NewGeometry(v.pages), v.viewport())
 	v.scroll.Y = v.layout.page(1).Y
 	first, last := v.visiblePages()
 	v.requestVisible(first, last)
@@ -393,7 +394,7 @@ func TestDirectionalPrefetchAndTileReuse(t *testing.T) {
 		cache: make(map[int]cachedPage), tiles: make(map[rasterKey]cachedPage),
 		pages: []pageSize{{Width: 600, Height: 800}, {Width: 600, Height: 800}, {Width: 600, Height: 800}},
 	}
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = fitLayout(layout.NewGeometry(v.pages), v.viewport())
 	v.scroll.Y = v.layout.page(1).Y + 30
 	first, last := v.visiblePages()
 	v.requestVisible(first, last)
@@ -407,7 +408,7 @@ func TestDirectionalPrefetchAndTileReuse(t *testing.T) {
 	}
 	key := v.tileKeys[0]
 	frame := &pageFrame{key: key, pixels: image.NewRGBA(key.Tile.Sub(key.Tile.Min))}
-	if !v.finishPage(key, frame, nil) || v.tileBytes != key.Tile.Dx()*key.Tile.Dy()*4 {
+	if !v.applyRasterResult(key, frame, nil) || v.tileBytes != key.Tile.Dx()*key.Tile.Dy()*4 {
 		t.Fatal("visible tile was not cached with its region size")
 	}
 	v.scroll.X = 270
@@ -435,7 +436,7 @@ func TestDirectionalPrefetchAndTileReuse(t *testing.T) {
 	if v.tiles[key].frame != nil || v.tileBytes != 0 {
 		t.Fatal("tile beyond the one-tile margin was retained")
 	}
-	v.wanted = []rasterKey{v.layout.preview(v.document, 0, v.zoom)}
+	v.wanted = []rasterKey{v.layout.rasterKey(v.document, 0, render.PreviewResolution(v.zoom))}
 	if v.visibleWorkPending() {
 		t.Fatal("upward prefetch was counted as visible work")
 	}
@@ -467,7 +468,7 @@ func TestTileBudgetEvictsOnlyOffscreenTiles(t *testing.T) {
 		document: 1, width: 512, height: 512, zoom: 1, scale: 1,
 		pages: []pageSize{{Width: 600, Height: 800}}, tiles: make(map[rasterKey]cachedPage),
 	}
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = fitLayout(layout.NewGeometry(v.pages), v.viewport())
 	visible := rasterKey{Document: 1, Size: image.Pt(512, 800), Tile: image.Rect(0, 0, 512, 512)}
 	v.tileKeys = []rasterKey{visible}
 	v.tiles[visible] = cachedPage{frame: &pageFrame{key: visible}}
@@ -536,7 +537,7 @@ func testEngine(t *testing.T) func() (*engine, error) {
 	}
 	path := os.Getenv("MYGO_PDF_TEST_LIBRARY")
 	if path == "" {
-		path, err = filepath.Abs(filepath.Join("build", "test-resources", runtime.GOOS+"-"+runtime.GOARCH, "pdfium", name))
+		path, err = filepath.Abs(filepath.Join("..", "build", "test-resources", runtime.GOOS+"-"+runtime.GOARCH, "pdfium", name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -596,10 +597,11 @@ func encodePDF(objects []string) []byte {
 func TestRasterErrorFollowsViewportDemand(t *testing.T) {
 	v := &Viewer{width: 500, height: 300, zoom: 1, scale: 2, document: 1, cache: make(map[int]cachedPage), worker: &worker{wake: make(chan struct{}, 1)}}
 	v.pages = []pageSize{{Width: 400, Height: 600}}
-	v.layout = newFittedLayout(v.pages, v.loadViewport())
+	v.layout = fitLayout(layout.NewGeometry(v.pages), v.viewport())
 	view := ui.NewTester(func(c *ui.Context) { v.View(c, nil) }, 500, 300)
 	view.Frame()
-	v.cache[0] = cachedPage{failed: v.layout.raster(v.document, 0, v.scale), err: fmt.Errorf("obsolete resolution failed")}
+	key := v.layout.rasterKey(v.document, 0, render.FullPageResolution(v.scale))
+	v.cache[0] = cachedPage{failed: key, err: fmt.Errorf("obsolete resolution failed")}
 	view.Frame()
 	if _, shown := view.Find("obsolete resolution failed"); !shown || v.State().Render != RenderFailed {
 		t.Fatal("the current raster error must be visible in both state and view")

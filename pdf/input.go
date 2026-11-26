@@ -121,7 +121,7 @@ func (v *Viewer) extendSelection(ev ui.InputEvent, bounds ui.Rect) {
 		return
 	}
 	x, y := bounds.X+ev.X, bounds.Y+ev.Y
-	page := v.layout.firstPage(y)
+	page := v.layout.FirstPage(y)
 	data := v.metadata[page].data
 	if data == nil {
 		return
@@ -163,16 +163,16 @@ func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
 			position.Y = max(0, min(1, (v.scroll.Y-current.Y)/current.H))
 		}
 	}
-	vp := v.loadViewport()
-	vp.zoom = 1
-	baseScale := v.layout.geometry.fit(vp).scale
-	size := v.layout.size(index)
+	vp := v.viewport()
+	vp.Zoom = 1
+	baseScale := fitLayout(v.layout.Geometry, vp).Scale
+	size := v.layout.Size(index)
 	area := dest.Area
 	width := float64(size.Width) * float64(area.W)
 	height := float64(size.Height) * float64(area.H)
 	availableWidth := float64(max(1, v.width-2*v.gap))
 	availableHeight := float64(max(1, v.height-2*v.gap))
-	scale := v.layout.scale
+	scale := v.layout.Scale
 	switch dest.Mode {
 	case pdfium.DestinationXYZ:
 		if dest.Scale > 0 {
@@ -194,8 +194,8 @@ func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
 		}
 	}
 	v.zoom = max(0.5, min(4, float32(scale/baseScale)))
-	vp.zoom = v.zoom
-	v.layout = v.layout.geometry.fit(vp)
+	vp.Zoom = v.zoom
+	v.layout = fitLayout(v.layout.Geometry, vp)
 	page := v.layout.page(index)
 	x := page.X + position.X*page.W
 	y := page.Y + position.Y*page.H
@@ -210,7 +210,7 @@ func (v *Viewer) goToDestination(index int, dest pdfium.Destination) {
 	if y >= page.Y+page.H || y+v.height <= page.Y {
 		y = page.Y
 	}
-	v.scroll.X = max(0, min(x, v.layout.width-v.width))
+	v.scroll.X = max(0, min(x, v.layout.Width-v.width))
 	v.navigateTo(index+1, y)
 }
 

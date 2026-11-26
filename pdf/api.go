@@ -193,7 +193,7 @@ func (v *Viewer) State() State {
 			s.Err = v.metadata[i].err
 		}
 		var rasterErr error
-		if entry.err != nil || (v.layout.geometry.lazy != nil && v.layout.geometry.lazy.failed[i] != nil) {
+		if entry.err != nil || v.dimensionErrors[i] != nil {
 			if demand.budget == 0 {
 				demand = v.pageRasterDemand(first, last)
 			}
@@ -222,7 +222,8 @@ func (v *Viewer) State() State {
 	return s
 }
 
-// OnChange subscribes to coalesced UI-thread state changes. It returns an unsubscribe function.
+// OnChange subscribes to coalesced UI-thread state changes.
+// Call the returned unsubscribe function on the window's UI thread.
 func (v *Viewer) OnChange(fn func(State)) func() {
 	if v.closed || fn == nil {
 		return func() {}
@@ -294,9 +295,9 @@ func (v *Viewer) SetFit(fit Fit) {
 	}
 	anchor := v.anchor()
 	v.fit, v.zoom = fit, 1
-	v.layout = v.layout.geometry.fit(v.loadViewport())
-	v.scroll.Y = min(v.layout.offset(anchor), max(0, v.layout.height-v.height))
-	v.scroll.X = min(v.scroll.X, max(0, v.layout.width-v.width))
+	v.layout = fitLayout(v.layout.Geometry, v.viewport())
+	v.scroll.Y = min(v.layout.Offset(anchor), max(0, v.layout.Height-v.height))
+	v.scroll.X = min(v.scroll.X, max(0, v.layout.Width-v.width))
 	v.redraw()
 }
 
@@ -312,9 +313,9 @@ func (v *Viewer) currentPage() int {
 		return page - 1
 	}
 	y := v.scroll.Y + v.height/2
-	page := v.layout.firstPage(y)
-	if page > 0 && float64(y) < v.layout.top(page) {
-		if float64(y)-v.layout.bottom(page-1) <= v.layout.top(page)-float64(y) {
+	page := v.layout.FirstPage(y)
+	if page > 0 && float64(y) < v.layout.Top(page) {
+		if float64(y)-v.layout.Bottom(page-1) <= v.layout.Top(page)-float64(y) {
 			page--
 		}
 	}

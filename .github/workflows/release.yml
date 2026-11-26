@@ -85,9 +85,9 @@ jobs:
             | unique
             | if length == 1 and .[0] != "" then .[0]
               else error("expected one PDFium asset release tag in mygo-plugin.json") end
-          ' mygo-plugin.json)
+          ' internal/pdfium/mygo-plugin.json)
           go run ./cmd/pdfium-resources -release="$asset_tag"
-          diff -u mygo-plugin.json build/pdfium-release/mygo-plugin.json
+          diff -u internal/pdfium/mygo-plugin.json build/pdfium-release/mygo-plugin.json
 
           if [[ "$(gh release view "$asset_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != false ]]; then
             printf 'PDFium asset release %s must be published\n' "$asset_tag" >&2

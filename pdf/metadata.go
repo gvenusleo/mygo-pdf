@@ -29,7 +29,7 @@ func (v *Viewer) metadataRequests(first, last int) []geometryKey {
 	}
 	var keys []geometryKey
 	for page := first; page <= last && remaining >= render.PageMetadata; page++ {
-		if _, ok := v.metadata[page]; !ok && v.layout.geometry.exact(page) {
+		if _, ok := v.metadata[page]; !ok && v.layout.Geometry.Exact(page) {
 			remaining -= render.PageMetadata
 			keys = append(keys, geometryKey{v.document, page})
 		}

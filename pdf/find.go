@@ -188,7 +188,7 @@ func (v *Viewer) revealMatch(match *pdfium.Match) {
 		box := rotatedRect(match.Boxes[0], v.rotation)
 		y += min(page.H, (box.Y+box.H/2)*page.H) - v.height/2
 		x := page.X + (box.X+box.W/2)*page.W - v.width/2
-		v.scroll.X = max(0, min(x, v.layout.width-v.width))
+		v.scroll.X = max(0, min(x, v.layout.Width-v.width))
 	}
 	v.navigateTo(match.Page+1, y)
 }

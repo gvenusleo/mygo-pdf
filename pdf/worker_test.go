@@ -20,7 +20,7 @@ func TestPrefetchYieldsToNewVisibleGeometry(t *testing.T) {
 	if !errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatal("prefetch did not yield to new visible geometry")
 	}
-	w.finishPage(prefetch, false)
+	w.completeRasterTask(prefetch, false)
 	if key := w.next().metadata; key != visible {
 		t.Fatalf("next geometry key = %+v, want %+v", key, visible)
 	}

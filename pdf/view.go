@@ -51,7 +51,7 @@ func (v *Viewer) View(c *ui.Context, layoutKey any) {
 	demand := v.requestVisible(first, last)
 	v.notify()
 	scroll.Children(func() {
-		ui.Box(c).Size(v.layout.width, v.layout.height).Shrink(0).Children(func() {
+		ui.Box(c).Size(v.layout.Width, v.layout.Height).Shrink(0).Children(func() {
 			for i := first; i <= last; i++ {
 				v.pageView(c, i, demand)
 			}

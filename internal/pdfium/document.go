@@ -25,13 +25,11 @@ var (
 	ErrLimit      = errors.New("PDF exceeds resource limits")
 )
 
-type PageSize struct{ Width, Height float32 }
-
 type Document struct {
 	ID           uint64
 	handle       uintptr
 	pin          runtime.Pinner
-	Pages        []PageSize
+	Pages        []render.PageSize
 	copy         bool
 	accessible   bool
 	source       *fileSource
@@ -126,7 +124,7 @@ func (e *Engine) readPages(ctx context.Context, doc *Document) error {
 	if count > maxPages {
 		return fmt.Errorf("%w: %d pages", ErrLimit, count)
 	}
-	doc.Pages = make([]PageSize, count)
+	doc.Pages = make([]render.PageSize, count)
 	if doc.source != nil {
 		return nil
 	}
@@ -143,14 +141,14 @@ func (e *Engine) readPages(ctx context.Context, doc *Document) error {
 	return nil
 }
 
-func (e *Engine) readSize(doc *Document, index int) (size PageSize, err error) {
+func (e *Engine) readSize(doc *Document, index int) (size render.PageSize, err error) {
 	if e.pageSize(doc.handle, int32(index), &size) == 0 || !validSize(size.Width) || !validSize(size.Height) {
-		return PageSize{}, fmt.Errorf("%w: cannot read dimensions of page %d", ErrInvalidPDF, index+1)
+		return render.PageSize{}, fmt.Errorf("%w: cannot read dimensions of page %d", ErrInvalidPDF, index+1)
 	}
 	return size, nil
 }
 
-func (e *Engine) ReadPageSize(ctx context.Context, doc *Document, index int, background bool) (size PageSize, err error) {
+func (e *Engine) ReadPageSize(ctx context.Context, doc *Document, index int, background bool) (size render.PageSize, err error) {
 	mu.lock(ctx, background)
 	defer mu.Unlock()
 	if err = ctx.Err(); err != nil {
@@ -159,7 +157,7 @@ func (e *Engine) ReadPageSize(ctx context.Context, doc *Document, index int, bac
 	doc.startRead(ctx)
 	size, err = e.readSize(doc, index)
 	if readErr := doc.finishRead(); readErr != nil {
-		return PageSize{}, readErr
+		return render.PageSize{}, readErr
 	}
 	return size, err
 }

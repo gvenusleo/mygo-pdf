@@ -21,12 +21,12 @@ func TestReaderAtLifetimeAndPrefetch(t *testing.T) {
 	if v.loadErr != nil {
 		t.Fatal(v.loadErr)
 	}
-	if known := v.layout.geometry.lazy.nodes[1].count; known > 8 {
+	if known := v.layout.Geometry.Measured(); known > 8 {
 		t.Fatalf("first viewport measured %d pages", known)
 	}
 	_, last := v.visiblePages()
 	await(t, updates, view, func() bool { return v.cache[last+1].frame != nil })
-	if measured := v.layout.geometry.lazy.nodes[1].count; measured > 8 {
+	if measured := v.layout.Geometry.Measured(); measured > 8 {
 		t.Fatalf("neighbor preview waited for %d size probes", measured)
 	}
 	cancel()

@@ -2,18 +2,21 @@
 
 Measured on an Apple M3 running macOS 27.2.1 with Go 1.27.4, MyGo v0.10.0, and PDFium chromium/8179. The reference build is `v0.1.1` (`7239d35`). The pre-change branch is `62025b3`.
 
-The opt-in `TestViewerPerformance` in `performance_test.go` uses the same generated documents and 900 × 700 DIP headless viewport at 2× raster scale on all three builds. A cold-open sample starts a fresh process. Each gesture run performs 12 pinch and scroll steps, waiting for visible rendering to settle after each step. Open timings start immediately before `LoadBytes`. Gesture frame timing covers delivery of the input and its synchronous MyGo Tester frame. Peak RSS comes from `/usr/bin/time -l` on macOS and includes the test process. Run the timings in isolation from build and test jobs.
+The opt-in `TestViewerPerformance` in [`pdf/performance_test.go`](../pdf/performance_test.go) uses the same generated documents and 900 × 700 DIP headless viewport at 2× raster scale on all three builds. A cold-open sample starts a fresh process. Each gesture run performs 12 pinch and scroll steps, waiting for visible rendering to settle after each step. Open timings start immediately before `LoadBytes`. Gesture frame timing covers delivery of the input and its synchronous MyGo Tester frame. Peak RSS comes from `/usr/bin/time -l` on macOS and includes the test process. Run the timings in isolation from build and test jobs.
 
 ```sh
 mise run resources
-go test -c -o /tmp/mygo-pdf-performance.test .
-MYGO_PDF_REQUIRE_INTEGRATION=1 MYGO_PDF_MEASURE=open \
-  /usr/bin/time -l /tmp/mygo-pdf-performance.test -test.v \
-  -test.run '^TestViewerPerformance$/^ordinary$'
-go test -run '^$' -bench '^BenchmarkZoom10000Pages$' -benchmem -count=10 .
+go test -c -o /tmp/mygo-pdf-performance.test ./pdf
+(
+  cd pdf
+  MYGO_PDF_REQUIRE_INTEGRATION=1 MYGO_PDF_MEASURE=open \
+    /usr/bin/time -l /tmp/mygo-pdf-performance.test -test.v \
+    -test.run '^TestViewerPerformance$/^ordinary$'
+)
+go test -run '^$' -bench '^BenchmarkZoom10000Pages$' -benchmem -count=10 ./pdf
 ```
 
-Replace `open` with `gesture` for gesture runs. The byte-backed fixture names are `ordinary`, `mixed`, `scan`, and `long`. For v0.2.1, run the test from that tag's checkout. For the historical v0.1.1 and 62025b3 comparisons, restore the harness from `git show v0.2.1:performance_test.go` in a temporary checkout and copy the `encodePDF` helper from v0.2.1's `viewer_test.go` into a test file there. For the historical zoom benchmark, copy only `BenchmarkZoom10000Pages` from v0.2.1's `layout_test.go`.
+Replace `open` with `gesture` for gesture runs. The byte-backed fixture names are `ordinary`, `mixed`, `scan`, and `long`. For v0.2.1, run all commands from that tag's repository root and pass `.` as the Go test package. For the historical v0.1.1 and 62025b3 comparisons, restore the harness from `git show v0.2.1:performance_test.go` in a temporary checkout and copy the `encodePDF` helper from v0.2.1's `viewer_test.go` into a test file there. For the historical zoom benchmark, copy only `BenchmarkZoom10000Pages` from v0.2.1's `layout_test.go`.
 
 ## Measurements
 
